@@ -1,0 +1,21 @@
+{
+    "configurations": [
+        {
+            "type": "cppvsdbg",
+            "request": "launch",
+            "name": "Launch O2SERVER Gateway",
+            "program": "${workspaceFolder}/target/debug/gateway.exe",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "externalConsole": true
+        },
+        {
+            "type": "cppvsdbg",
+            "request": "attach",
+            "name": "Attach to O2SERVER Gateway",
+            "processId": "${command:pickProcess}",
+        }
+    ]
+}

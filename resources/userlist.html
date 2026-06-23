@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>X3-JAM Server</title>
+
+<style>
+body {
+    background-color: black;
+    color: white;
+    font-family: Arial, sans-serif;
+    padding: 20px;
+    font-size: 12px; /* smaller text */
+}
+
+h1 {
+    margin: 0 0 10px 0;
+    font-size: 16px;
+}
+
+.channel {
+    margin-bottom: 15px;
+    font-size: 12px;
+}
+
+.user {
+    margin-left: 20px;
+    font-size: 11px;
+}
+
+.my-user {
+    background-color: yellow;
+    color: black;
+    padding: 2px 4px;
+    display: inline-block;
+}
+
+button {
+    padding: 4px 10px;
+    font-size: 12px;
+}
+</style>
+</head>
+
+<body>
+
+<h1>X3-JAM Server</h1>
+
+<div id="content">Loading...</div>
+
+<br>
+
+<button type="button" onclick="loadUsers()">
+    Refresh
+</button>
+
+<script type="text/javascript">
+
+var myID = "$MY_ID_REPLACED$";
+
+function escapeHtml(text) {
+    var div = document.createElement("div");
+    div.appendChild(document.createTextNode(text));
+    return div.innerHTML;
+}
+
+function parseJSON(text) {
+    if (window.JSON && window.JSON.parse) {
+        return window.JSON.parse(text);
+    }
+    return eval("(" + text + ")");
+}
+
+function loadUsers() {
+    var container = document.getElementById("content");
+
+    container.innerHTML = "Loading...";
+
+    var xhr = new XMLHttpRequest();
+
+    xhr.onreadystatechange = function () {
+
+        if (xhr.readyState !== 4) return;
+
+        if (xhr.status !== 200) {
+            container.innerHTML = "Failed to load users.<br/>HTTP " + xhr.status;
+            return;
+        }
+
+        try {
+            var channels = parseJSON(xhr.responseText);
+
+            var html = "";
+            var totalUsers = 0;
+
+            for (var i = 0; i < channels.length; i++) {
+
+                var channel = channels[i];
+                var users = channel.users || [];
+
+                if (users.length > 0) {
+
+                    totalUsers += users.length;
+
+                    html += "<div class='channel'>" +
+                        "<strong>Region-" + channel.region +
+                        " CH-" + channel.channel +
+                        " [" + users.length + "]</strong><br/>";
+
+                    for (var j = 0; j < users.length; j++) {
+
+                        var user = users[j];
+
+                        var isMe = (String(user.id) === String(myID));
+
+                        if (isMe) {
+                            html += "<div class='user my-user'>";
+                        } else {
+                            html += "<div class='user'>";
+                        }
+
+                        html += "- [" + user.level + "] " +
+                            escapeHtml(user.nickname) +
+                            "</div>";
+                    }
+
+                    html += "</div>";
+                }
+            }
+
+            container.innerHTML =
+                "Online Users: " + totalUsers +
+                "<br/><br/>" +
+                (html || "No users online");
+
+        } catch (e) {
+            container.innerHTML =
+                "Failed to parse users.<br/>" + e.message;
+        }
+    };
+
+    xhr.open("GET", "/api/getusers", true);
+    xhr.send();
+}
+
+loadUsers();
+
+</script>
+
+</body>
+</html>

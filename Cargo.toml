@@ -1,0 +1,9 @@
+[workspace]
+resolver = "3"
+members = [
+    "gateway",
+    "lib",
+    "encoder",
+    "encoder-derive",
+    "database",
+]
