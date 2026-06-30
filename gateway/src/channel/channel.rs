@@ -120,7 +120,7 @@ impl Channel {
     }
 
     pub fn find_empty_room_id(&self) -> Option<u32> {
-        for room_id in 1..=MAX_ROOM_ID {
+        for room_id in 0..MAX_ROOM_ID {
             if !self.rooms.contains_key(&room_id) {
                 return Some(room_id);
             }

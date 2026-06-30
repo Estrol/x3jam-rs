@@ -87,17 +87,8 @@ async fn handle_client_list(client: &mut super::Client, packet: &Vec<MusicIdEntr
         return;
     };
 
-    let Some(user) = client.user() else {
-        println!(
-            "Client {} is not logged in, cannot get client list",
-            client.id
-        );
-
-        return;
-    };
-
     ch.send::<()>(ChannelCommand::SetClientList {
-        user_id: user.info.id,
+        user_id,
         client_ids: packet.clone(),
     })
     .await
@@ -111,15 +102,13 @@ async fn handle_sync_info(client: &mut super::Client, _packet: &()) {
         gem: u32,
     }
 
-    let id = client.user().map(|u| u.info.id).unwrap_or(0);
-
     let Some((user_id, ch)) = client.channel() else {
         println!("Client {} is not in a channel, cannot sync info", client.id);
         return;
     };
 
     let Ok(user) = ch
-        .send::<User>(ChannelCommand::SyncUserInfo { user_id: id })
+        .send::<User>(ChannelCommand::SyncUserInfo { user_id })
         .await
     else {
         println!(

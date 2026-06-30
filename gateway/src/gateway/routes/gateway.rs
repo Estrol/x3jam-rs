@@ -131,7 +131,7 @@ pub struct VersionRequest {
 }
 
 #[gateway_derive::route(RequestId::RequestVersion)]
-pub async fn request_version_proc(client: &mut super::Client, request: &VersionRequest) {
+pub async fn request_version_proc(_client: &mut super::Client, request: &VersionRequest) {
     const EXPECTED_VERSION: &str = "1.6.1";
 
     if request.version != str2int(EXPECTED_VERSION.as_bytes()) {
