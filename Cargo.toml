@@ -6,4 +6,5 @@ members = [
     "encoder",
     "encoder-derive",
     "database",
+    "generate_ojnlist",
 ]
