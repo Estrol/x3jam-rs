@@ -90,7 +90,11 @@ pub enum RoomCommand {
     SubmitScore {
         user_id: u64,
         score_request: ScoreSubmitRequest,
-    }
+    },
+    Chat {
+        user_id: u64,
+        message: String,
+    },
 }
 
 pub type Response = Box<dyn std::any::Any + Send + Sync>;
@@ -311,7 +315,7 @@ pub async fn process_command(room: &mut Room, mut command: RoomRequest) {
             });
         }
         RoomCommand::RoomChat { user_id, message } => {
-            room.on_chat(user_id, &message).await;
+            room.chat(user_id, &message).await;
         }
         RoomCommand::SetMusicId {
             music_id,
@@ -366,7 +370,10 @@ pub async fn process_command(room: &mut Room, mut command: RoomRequest) {
         },
         RoomCommand::SubmitScore { user_id, score_request } => {
             command.send(room.on_game_score_submit(user_id, score_request).await);
-        }
+        },
+        RoomCommand::Chat { user_id, message } => {
+            room.chat(user_id, &message).await;
+        },
     }
 }
 

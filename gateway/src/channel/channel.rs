@@ -6,7 +6,7 @@ use crate::{
     channel::{
         ChannelWeakHandle, ojnlist::Header, user_repository::UserRepository,
     }, gateway::{
-        commands::EventId, events::listroom::{ListRoomAddRoomEventArgs, ListRoomChangeRoomMaxPlayerEventArgs, ListRoomRemoveRoomEventArgs}, routes::{listroom::{
+        commands::EventId, events::listroom::{ListRoomAddRoomEventArgs, ListRoomChangeRoomMaxPlayerEventArgs, ListRoomChatEventArgs, ListRoomRemoveRoomEventArgs}, routes::{listroom::{
             JoinErrorCode, JoinRoomResponse, RoomEntry,
             ServerMusicEntry, UserInfoEntry,
         }, room::CreateRoomResult},
@@ -300,6 +300,21 @@ impl Channel {
         } else {
             None
         }
+    }
+
+    pub fn chat(&mut self, user_id: u64, message: String) {
+        let Some(user_entry) = self.users.get(user_id) else {
+            return;
+        };
+
+        self.users.broadcast(
+            EventId::ListRoomOnChat,
+            ListRoomChatEventArgs {
+                author: to_cstring(&user_entry.user.info.name),
+                message: to_cstring(&message),
+            },
+            None,
+        );
     }
 
     pub async fn shutdown(&mut self) {

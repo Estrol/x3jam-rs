@@ -7,7 +7,7 @@ use futures::FutureExt as _;
 use tokio::sync::{mpsc::UnboundedSender, oneshot};
 
 use crate::{
-    gateway::{commands::EventId, events::IEventData, routes::room::CreateRoomResult}, room::{
+    gateway::{commands::EventId, events::IEventData}, room::{
         MusicId, MusicIdEntry, RoomMode,
     }, user::User,
 };
@@ -184,8 +184,8 @@ impl ChannelWeakHandle {
 pub async fn process_command(
     channel: &mut channel::Channel, 
     mut request: ChannelRequest, 
-    token: &tokio_util::sync::CancellationToken,
-    sender: &UnboundedSender<ChannelRequest>,
+    _token: &tokio_util::sync::CancellationToken,
+    _sender: &UnboundedSender<ChannelRequest>,
     weak: &mut Option<ChannelWeakHandle>
 ) {
     let Some(data) = request.data.take() else {
@@ -270,11 +270,8 @@ pub async fn process_command(
 
             request.send(response);
         },
-        ChannelCommand::RoomChat { user_id, message } => {
-            // channel.room_chat(user_id, message).await;
-        }
-        ChannelCommand::ListRoomChat { user_id, message } => {
-            // channel.list_room_chat(user_id, message).await;
+        ChannelCommand::Chat { user_id, message } => {
+            channel.chat(user_id, message);
         }
         ChannelCommand::RequestOJNInfo { id } => {
             let result = channel.lists
@@ -391,11 +388,7 @@ pub enum ChannelCommand {
     },
 
     // Chat
-    RoomChat {
-        user_id: u64,
-        message: String,
-    },
-    ListRoomChat {
+    Chat {
         user_id: u64,
         message: String,
     },

@@ -1130,7 +1130,7 @@ impl Room {
         }
     }
 
-    pub async fn on_chat(&mut self, user: u64, message: &str) {
+    pub async fn chat(&mut self, user: u64, message: &str) {
         let nickname = if let Some((_, UserSlot::User { user, .. })) = self.get_user_slot_mut(user) {
             to_cstring(&user.nickname())
         } else {
