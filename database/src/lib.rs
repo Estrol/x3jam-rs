@@ -1,5 +1,7 @@
 use sea_orm::{
-    ActiveValue::{NotSet, Set}, Database, QueryOrder as _, QuerySelect as _, TransactionTrait as _, entity::prelude::*
+    ActiveValue::{NotSet, Set},
+    Database, QueryOrder as _, QuerySelect as _, TransactionTrait as _,
+    entity::prelude::*,
 };
 use sea_orm_migration::prelude::*;
 
@@ -60,7 +62,12 @@ pub struct Score {
     pub miss: u32,
     pub max_combo: u32,
     pub jam_combo: u32,
+    pub timing: u32,
     pub rate: f32,
+    pub fln: u32,
+    pub sln: u32,
+    pub nln: u32,
+    pub arragement: [u8; 7],
     pub skills: Vec<u32>,
     pub timestamp: DateTimeUtc,
 }
@@ -157,7 +164,10 @@ impl GameDatabase {
         };
     }
 
-    pub async fn get_user_authentication_info(&self, username: &str) -> Option<UserAuthenticationInfo> {
+    pub async fn get_user_authentication_info(
+        &self,
+        username: &str,
+    ) -> Option<UserAuthenticationInfo> {
         models::user::Entity::find()
             .filter(models::user::Column::Name.eq(username))
             .one(&self.connection)
@@ -272,8 +282,7 @@ impl GameDatabase {
             .await
             .expect("Failed to insert equipment for new user");
 
-        self.get_user_by_id(insert_result.last_insert_id)
-            .await
+        self.get_user_by_id(insert_result.last_insert_id).await
     }
 
     pub async fn save_user(
@@ -467,7 +476,10 @@ impl GameDatabase {
         Ok(())
     }
 
-    pub async fn create_session(&self, user_id: u64) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn create_session(
+        &self,
+        user_id: u64,
+    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
         let existing_session = models::session::Entity::find()
             .filter(models::session::Column::UserId.eq(user_id))
             .one(&self.connection)
@@ -489,7 +501,10 @@ impl GameDatabase {
         Ok(true)
     }
 
-    pub async fn delete_session(&self, user_id: u64) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn delete_session(
+        &self,
+        user_id: u64,
+    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
         let delete_result = models::session::Entity::delete_many()
             .filter(models::session::Column::UserId.eq(user_id))
             .exec(&self.connection)
@@ -498,7 +513,10 @@ impl GameDatabase {
         Ok(delete_result.rows_affected > 0)
     }
 
-    pub async fn submit_scores(&self, scores: &[Score]) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn submit_scores(
+        &self,
+        scores: &[Score],
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         if scores.is_empty() {
             return Ok(());
         }
@@ -516,37 +534,55 @@ impl GameDatabase {
                 miss: Set(score.miss as u16),
                 max_combo: Set(score.max_combo as u16),
                 jam_combo: Set(score.jam_combo as u16),
+                timing: Set(score.timing),
                 rate: Set(score.rate),
-                skills: Set(score.skills.iter().map(|s| s.to_string()).collect::<Vec<String>>().join(",")),
+                fln: Set(score.fln),
+                sln: Set(score.sln),
+                nln: Set(score.nln),
+                arragement: Set(score
+                    .arragement
+                    .iter()
+                    .map(|&n| n.to_string())
+                    .collect::<Vec<String>>()
+                    .join("")),
+                skills: Set(score
+                    .skills
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect::<Vec<String>>()
+                    .join(",")),
                 timestamp: Set(score.timestamp),
             })
             .collect();
 
         models::score::Entity::insert_many(active_models)
             .on_conflict(
-                OnConflict::columns([models::score::Column::UserId, models::score::Column::MusicId])
-                    .update_columns([
-                        models::score::Column::Score,
-                        models::score::Column::Cool,
-                        models::score::Column::Good,
-                        models::score::Column::Bad,
-                        models::score::Column::Miss,
-                        models::score::Column::MaxCombo,
-                        models::score::Column::JamCombo,
-                        models::score::Column::Rate,
-                        models::score::Column::Skills,
-                        models::score::Column::Timestamp,
-                    ])
-                    .value(
-                        models::score::Column::Score,
-                        Expr::case(
-                            Expr::col((models::score::Entity, models::score::Column::Score))
-                                .gt(Expr::col(models::score::Column::Score)),
-                            Expr::col((models::score::Entity, models::score::Column::Score)),
-                        )
-                        .finally(Expr::col(models::score::Column::Score)),
+                OnConflict::columns([
+                    models::score::Column::UserId,
+                    models::score::Column::MusicId,
+                ])
+                .update_columns([
+                    models::score::Column::Score,
+                    models::score::Column::Cool,
+                    models::score::Column::Good,
+                    models::score::Column::Bad,
+                    models::score::Column::Miss,
+                    models::score::Column::MaxCombo,
+                    models::score::Column::JamCombo,
+                    models::score::Column::Rate,
+                    models::score::Column::Skills,
+                    models::score::Column::Timestamp,
+                ])
+                .value(
+                    models::score::Column::Score,
+                    Expr::case(
+                        Expr::col((models::score::Entity, models::score::Column::Score))
+                            .gt(Expr::col(models::score::Column::Score)),
+                        Expr::col((models::score::Entity, models::score::Column::Score)),
                     )
-                    .to_owned(),
+                    .finally(Expr::col(models::score::Column::Score)),
+                )
+                .to_owned(),
             )
             .exec(&self.connection)
             .await?;
@@ -572,13 +608,28 @@ impl GameDatabase {
                 miss: model.miss as u32,
                 max_combo: model.max_combo as u32,
                 jam_combo: model.jam_combo as u32,
+                timing: model.timing,
                 rate: model.rate,
-                skills: model.skills.split(',').map(|s| u32::from_str_radix(s, 10).unwrap_or(0)).collect(),
+                fln: model.fln,
+                sln: model.sln,
+                nln: model.nln,
+                arragement: model
+                    .arragement
+                    .chars()
+                    .map(|c| c.to_digit(10).unwrap_or(0) as u8)
+                    .collect::<Vec<u8>>()
+                    .try_into()
+                    .unwrap_or([0; 7]),
+                skills: model
+                    .skills
+                    .split(',')
+                    .map(|s| u32::from_str_radix(s, 10).unwrap_or(0))
+                    .collect(),
                 timestamp: model.timestamp,
             })
             .collect()
     }
-    
+
     pub async fn get_music_scores(&self, music_id: u32) -> Vec<Score> {
         models::score::Entity::find()
             .filter(models::score::Column::MusicId.eq(music_id))
@@ -597,8 +648,23 @@ impl GameDatabase {
                 miss: model.miss as u32,
                 max_combo: model.max_combo as u32,
                 jam_combo: model.jam_combo as u32,
+                timing: model.timing,
                 rate: model.rate,
-                skills: model.skills.split(',').map(|s| u32::from_str_radix(s, 10).unwrap_or(0)).collect(),
+                fln: model.fln,
+                sln: model.sln,
+                nln: model.nln,
+                arragement: model
+                    .arragement
+                    .chars()
+                    .map(|c| c.to_digit(10).unwrap_or(0) as u8)
+                    .collect::<Vec<u8>>()
+                    .try_into()
+                    .unwrap_or([0; 7]),
+                skills: model
+                    .skills
+                    .split(',')
+                    .map(|s| u32::from_str_radix(s, 10).unwrap_or(0))
+                    .collect(),
                 timestamp: model.timestamp,
             })
             .collect()
@@ -624,8 +690,23 @@ impl GameDatabase {
                 miss: model.miss as u32,
                 max_combo: model.max_combo as u32,
                 jam_combo: model.jam_combo as u32,
+                timing: model.timing,
                 rate: model.rate,
-                skills: model.skills.split(',').map(|s| u32::from_str_radix(s, 10).unwrap_or(0)).collect(),
+                fln: model.fln,
+                sln: model.sln,
+                nln: model.nln,
+                arragement: model
+                    .arragement
+                    .chars()
+                    .map(|c| c.to_digit(10).unwrap_or(0) as u8)
+                    .collect::<Vec<u8>>()
+                    .try_into()
+                    .unwrap_or([0; 7]),
+                skills: model
+                    .skills
+                    .split(',')
+                    .map(|s| u32::from_str_radix(s, 10).unwrap_or(0))
+                    .collect(),
                 timestamp: model.timestamp,
             })
             .collect()
@@ -666,7 +747,12 @@ pub mod tests {
             miss: 1,
             max_combo: 15,
             jam_combo: 3,
-            rate: 95.5,
+            timing: 0,
+            rate: 1.0,
+            fln: 0,
+            sln: 0,
+            nln: 0,
+            arragement: [1, 2, 3, 4, 5, 6, 7],
             skills: vec![1, 2, 3],
             timestamp: chrono::Utc::now(),
         };
@@ -682,7 +768,12 @@ pub mod tests {
             miss: 0,
             max_combo: 17,
             jam_combo: 4,
-            rate: 97.0,
+            timing: 0,
+            rate: 1.5,
+            fln: 0,
+            sln: 0,
+            nln: 0,
+            arragement: [7, 6, 5, 4, 3, 2, 1],
             skills: vec![2, 3, 4],
             timestamp: chrono::Utc::now(),
         };

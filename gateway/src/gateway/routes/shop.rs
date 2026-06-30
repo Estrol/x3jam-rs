@@ -1,5 +1,9 @@
-#[gateway_derive::route(RequestId::ShopEnter)]
-async fn shop_enter(_client: &mut super::Client, _packet: &mut super::Packet) {}
-
 #[gateway_derive::route(RequestId::ShopLeave)]
-async fn shop_leave(_client: &mut super::Client, _packet: &mut super::Packet) {}
+async fn enter_shop(_client: &mut super::Client, _packet: &()) {
+    // The game sends this packet when the player opens the shop, but it doesn't seem to expect a response for it, so we just ignore it.
+}
+
+#[gateway_derive::route(RequestId::ShopEnter)]
+async fn leave_shop(_client: &mut super::Client, _packet: &()) {
+    // The game sends this packet when the player closes the shop, but it doesn't seem to expect a response for it, so we just ignore it.
+}

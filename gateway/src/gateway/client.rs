@@ -1,21 +1,17 @@
 use std::{
     io::{Cursor, Write},
-    sync::{Arc, Weak},
+    sync::Arc,
 };
 
-use tokio::sync::Mutex;
 use tcpserver::{IClient, client};
+use tokio::sync::mpsc::UnboundedSender;
 
-use crate::gateway::{
-    channel::Channel,
-    commands::EventId,
-    events::IEventData,
-    room::{MusicId, Room},
-    stateful::StatefulXor,
-    user::User,
+use crate::{
+    channel::ChannelWeakHandle, gateway::{commands::EventId, events::IEventData, stateful::StatefulXor}, room::{MusicId, RoomWeakHandle}, user::User,
 };
 
 const MAX_PACKET_SIZE: usize = 1024 * 8; // 8 KB
+const INVALID_USER_ID: u64 = u64::MAX;
 
 #[allow(dead_code)]
 pub struct Client {
@@ -27,17 +23,17 @@ pub struct Client {
 
     // Server data:
     pub xor: StatefulXor,
-    pub login_xor_char: u8,
-    pub sender: Option<Arc<tokio::sync::mpsc::UnboundedSender<(EventId, Arc<dyn IEventData>)>>>,
+    pub sender: Option<UnboundedSender<(EventId, Arc<dyn IEventData>)>>,
     pub client_list: Vec<MusicId>,
-    pub channel: Option<Weak<Mutex<Channel>>>,
-    pub room: Option<Weak<Mutex<Room>>>,
     pub user: Option<User>,
 
     pub queue: Vec<Vec<u8>>,
     pub queue_begin: bool,
 
     pub session_entered: bool,
+    pub channel_handle: Option<ChannelWeakHandle>,
+    pub room_handle: Option<RoomWeakHandle>,
+    pub room_id: Option<u32>,
 }
 
 impl Client {
@@ -84,29 +80,6 @@ impl Client {
     pub async fn end(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         self.queue_begin = false;
 
-        // const MAX_SEND_AT_ONE_TIME: usize = MAX_PACKET_SIZE;
-        // let mut combined_data = Vec::new();
-
-        // let packets = std::mem::take(&mut self.queue);
-        // for packet in packets {
-        //     if !combined_data.is_empty()
-        //         && combined_data.len() + packet.len() > MAX_SEND_AT_ONE_TIME
-        //     {
-        //         self.send(&combined_data).await?;
-        //         combined_data.clear();
-        //     }
-
-        //     if packet.len() > MAX_SEND_AT_ONE_TIME {
-        //         self.send(&packet).await?;
-        //     } else {
-        //         combined_data.extend_from_slice(&packet);
-        //     }
-        // }
-
-        // if !combined_data.is_empty() {
-        //     self.send(&combined_data).await?;
-        // }
-
         for packet in std::mem::take(&mut self.queue) {
             self.send(&packet).await?;
         }
@@ -114,22 +87,36 @@ impl Client {
         Ok(())
     }
 
-    pub fn channel(&self) -> Option<Arc<Mutex<Channel>>> {
-        self.channel.as_ref()?.upgrade()
+    pub fn set_channel_handle(&mut self, handle: ChannelWeakHandle) {
+        self.channel_handle = Some(handle);
     }
 
-    pub fn room(&self) -> Option<Arc<Mutex<Room>>> {
-        self.room.as_ref()?.upgrade()
+    pub fn channel(&self) -> Option<(u64, &ChannelWeakHandle)> {
+        let Some(handle) = self.channel_handle.as_ref() else {
+            return None;
+        };
+
+        let Some(user) = self.user.as_ref() else {
+            return Some((INVALID_USER_ID, handle));
+        };
+
+        Some((user.id, handle))
     }
 
-    pub fn user(&mut self) -> Option<&mut User> {
-        self.user.as_mut()
+    pub fn room(&self) -> Option<(u64, &RoomWeakHandle)> {
+        let Some(handle) = self.room_handle.as_ref() else {
+            return None;
+        };
+
+        let Some(user) = self.user.as_ref() else {
+            return Some((INVALID_USER_ID, handle));
+        };
+
+        Some((user.id, handle))
     }
 
-    pub fn clear(&mut self) {
-        self.channel = None;
-        self.room = None;
-        self.user = None;
+    pub fn user(&self) -> Option<&User> {
+        self.user.as_ref()
     }
 }
 
@@ -143,14 +130,14 @@ client!(Client, |socket, run, id| {
         buffer: [0; 1024 * 8],
         data: Vec::new(),
         xor,
-        login_xor_char: 0,
         sender: None,
         client_list: Vec::new(),
-        channel: None,
-        room: None,
         user: None,
         queue: Vec::new(),
         queue_begin: false,
         session_entered: false,
+        channel_handle: None,
+        room_handle: None,
+        room_id: None,
     }
 });

@@ -1,13 +1,14 @@
-use std::sync::Arc;
-
-use crate::gateway::{
-    commands::{EventId, ResponseId}, events::connection::DisconnectEventArgs, user::{User, UserError}
+use crate::{
+    gateway::{
+        commands::ResponseId,
+    },
+    user::{User, UserError},
 };
 
 #[derive(encoder::StructDeserializer)]
-struct LoginRequest {
-    username: std::ffi::CString,
-    password: std::ffi::CString,
+pub struct LoginRequest {
+    pub username: std::ffi::CString,
+    pub password: std::ffi::CString,
 }
 
 #[repr(i32)]
@@ -20,35 +21,28 @@ pub enum LoginResult {
 }
 
 #[gateway_derive::route(RequestId::GatewayLogin)]
-pub async fn login_proc(client: &mut super::Client, packet: &mut super::Packet) {
-    match super::parse_request::<LoginRequest>(&packet.body) {
-        Ok(request) => {
-            let username = request.username.to_string_lossy().to_string();
-            let password = request.password.to_string_lossy().to_string();
+pub async fn login_proc(client: &mut super::Client, request: &LoginRequest) {
+    let username = request.username.to_string_lossy().to_string();
+    let password = request.password.to_string_lossy().to_string();
 
-            println!(
-                "Client {} is attempting to log in with username '{}'",
-                client.id, username
-            );
+    println!(
+        "Client {} is attempting to log in with username '{}'",
+        client.id, username
+    );
 
-            let result = match User::verify_credentials(&username, &password).await {
-                Ok(_) => LoginResult::Success,
-                Err(UserError::InvalidCredentials) => LoginResult::InvalidCredentials,
-                Err(UserError::Error(err)) => {
-                    println!("[Error] Failed to verify credentials: {}", err);
-                    LoginResult::GenericError
-                }
-            };
-
-            client
-                .send_packet(ResponseId::GatewayAuth, &result)
-                .await
-                .expect("Failed to send login response");
+    let result = match User::verify_credentials(&username, &password).await {
+        Ok(_) => LoginResult::Success,
+        Err(UserError::InvalidCredentials) => LoginResult::InvalidCredentials,
+        Err(UserError::Error(err)) => {
+            println!("[Error] Failed to verify credentials: {}", err);
+            LoginResult::GenericError
         }
-        Err(e) => {
-            println!("[Error] Failed to parse login request: {}", e);
-        }
-    }
+    };
+
+    client
+        .send_packet(ResponseId::GatewayAuth, &result)
+        .await
+        .expect("Failed to send login response");
 }
 
 #[derive(encoder::StructSerializer)]
@@ -57,74 +51,63 @@ struct VersionResponse {
 }
 
 #[gateway_derive::route(RequestId::GatewayReauth)]
-pub async fn reauth_proc(client: &mut super::Client, packet: &mut super::Packet) {
-    match super::parse_request::<LoginRequest>(&packet.body) {
-        Ok(request) => {
-            let username = request.username.to_string_lossy().to_string();
-            let password = request.password.to_string_lossy().to_string();
+pub async fn reauth_proc(client: &mut super::Client, request: &LoginRequest) {
+    let username = request.username.to_string_lossy().to_string();
+    let password = request.password.to_string_lossy().to_string();
 
-            println!(
-                "Client {} is attempting to re-authenticate with username '{}'",
-                client.id, username
-            );
+    println!(
+        "Client {} is attempting to re-authenticate with username '{}'",
+        client.id, username
+    );
 
-            let result = match User::verify_credentials(&username, &password).await {
-                Ok(user_id) => {
-                    if !User::try_create_session(user_id).await.unwrap_or(false) {
-                        LoginResult::AlreadyLoggedIn
-                    } else {
-                        if let Ok(mut user) = User::request_user(user_id, true).await {
-                            let Some(sender) = client.sender.as_ref() else {
-                                println!("Client sender is not available");
-                                return;
-                            };
+    let result = match User::verify_credentials(&username, &password).await {
+        Ok(user_id) => {
+            if !User::try_create_session(user_id).await.unwrap_or(false) {
+                LoginResult::AlreadyLoggedIn
+            } else {
+                if let Ok(mut user) = User::request_user(user_id, true).await {
+                    user.sender = client.sender.clone();
+                    
+                    client.user = Some(user);
+                    client.session_entered = true;
 
-                            user.set_sender(Arc::clone(sender));
-                            client.user = Some(user);
-                            client.session_entered = true;
+                    LoginResult::Success
+                } else {
+                    User::delete_session(user_id).await;
 
-                            LoginResult::Success
-                        } else {
-                            User::delete_session(user_id).await;
-
-                            LoginResult::GenericError
-                        }
-                    }
-                }
-                Err(UserError::InvalidCredentials) => LoginResult::InvalidCredentials,
-                Err(UserError::Error(err)) => {
-                    println!("[Error] Failed to verify credentials: {}", err);
                     LoginResult::GenericError
                 }
-            };
-
-            client
-                .send_packet(ResponseId::GatewayReauth, &result)
-                .await
-                .expect("Failed to send re-auth response");
-
-            // O2Hook2 extensions
-            if result == LoginResult::Success {
-                let response = VersionResponse {
-                    user_id: client.user.as_ref().unwrap().id as u32,
-                };
-
-                client
-                    .send_packet(ResponseId::RequestVersion, &response)
-                    .await
-                    .expect("Failed to send version response");
-
-                let test = std::ffi::CString::new("O2Hook2").unwrap();
-
-                client
-                    .send_packet(0xABCE as u16, &test)
-                    .await
-                    .expect("Failed to send re-auth completion packet");
             }
         }
-        Err(e) => {
-            println!("[Error] Failed to parse re-auth request: {}", e);
+        Err(UserError::InvalidCredentials) => LoginResult::InvalidCredentials,
+        Err(UserError::Error(err)) => {
+            println!("[Error] Failed to verify credentials: {}", err);
+            LoginResult::GenericError
         }
+    };
+
+    client
+        .send_packet(ResponseId::GatewayReauth, &result)
+        .await
+        .expect("Failed to send re-auth response");
+
+    // O2Hook2 extensions
+    if result == LoginResult::Success {
+        let response = VersionResponse {
+            user_id: client.user.as_ref().unwrap().id as u32,
+        };
+
+        client
+            .send_packet(ResponseId::RequestVersion, &response)
+            .await
+            .expect("Failed to send version response");
+
+        // let test = std::ffi::CString::new("O2Hook2").unwrap();
+
+        // client
+        //     .send_packet(0xABCE as u16, &test)
+        //     .await
+        //     .expect("Failed to send re-auth completion packet");
     }
 }
 
@@ -133,49 +116,43 @@ pub const fn str2int(bytes: &[u8]) -> u32 {
     let mut i = 0;
 
     while i < bytes.len() {
-        result = result.wrapping_mul(33)
-            ^ (bytes[i] as u32);
+        result = result.wrapping_mul(33) ^ (bytes[i] as u32);
         i += 1;
     }
 
     result
 }
 
+#[derive(Debug, encoder::StructDeserializer)]
+#[allow(dead_code)]
+pub struct VersionRequest {
+    pub version: u32,
+    pub user_id: u32,
+}
+
 #[gateway_derive::route(RequestId::RequestVersion)]
-pub async fn request_version_proc(client: &mut super::Client, _packet: &mut super::Packet) {
-    #[derive(Debug, encoder::StructDeserializer)]
-    #[allow(dead_code)]
-    struct VersionRequest {
-        version: u32,
-        user_id: u32,
-    }
+pub async fn request_version_proc(client: &mut super::Client, request: &VersionRequest) {
+    const EXPECTED_VERSION: &str = "1.6.1";
 
-    match super::parse_request::<VersionRequest>(&_packet.body) {
-        Ok(data) => {
-            const EXPECTED_VERSION: &str = "1.6.1";
+    if request.version != str2int(EXPECTED_VERSION.as_bytes()) {
+        // client
+        //     .send_packet(ResponseId::RejectVersion, &())
+        //     .await
+        //     .expect("Failed to send version response");
 
-            if data.version != str2int(EXPECTED_VERSION.as_bytes()) {
-                client.send_packet(ResponseId::RejectVersion, &())
-                    .await
-                    .expect("Failed to send version response");
+        // let Some(sender) = client.sender.as_ref() else {
+        //     println!("Client sender is not available");
+        //     return;
+        // };
 
-                let Some(sender) = client.sender.as_ref() else {
-                    println!("Client sender is not available");
-                    return;
-                };
-
-                sender.send((EventId::Disconnect, Arc::new(DisconnectEventArgs)))
-                    .expect("Failed to send disconnect event");
-            }
-        }
-        Err(e) => {
-            println!("[Error] Failed to parse version request: {}", e);
-        }
+        // sender
+        //     .send((EventId::Disconnect, Arc::new(DisconnectEventArgs)))
+        //     .expect("Failed to send disconnect event");
     }
 }
 
 #[gateway_derive::route(RequestId::GatewayConnect)]
-pub async fn connect_proc(client: &mut super::Client, _packet: &mut super::Packet) {
+pub async fn connect_proc(client: &mut super::Client, _request: &()) {
     #[derive(encoder::StructSerializer, Default)]
     struct ConnectResponse {
         value: u16,
@@ -199,7 +176,7 @@ pub async fn connect_proc(client: &mut super::Client, _packet: &mut super::Packe
 }
 
 #[gateway_derive::route(RequestId::GatewayReconnect)]
-pub async fn gateway_connect_proc(client: &mut super::Client, _packet: &mut super::Packet) {
+pub async fn gateway_connect_proc(client: &mut super::Client, _request: &()) {
     #[derive(encoder::StructSerializer, Default)]
     struct ConnectResponse {
         value: u16,

@@ -2,16 +2,21 @@ use database::{Equipment, UserInfo};
 use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedSender;
 
-use crate::gateway::{
-    commands::EventId,
-    events::IEventData,
+pub mod itemid;
+pub mod itemtype;
+
+pub use itemid::ItemId;
+pub use itemtype::ItemType;
+
+use crate::{
     room::{MusicIdEntry, SkillId},
+    gateway::{commands::EventId, events::IEventData},
 };
 
 #[derive(Debug, Clone)]
 pub struct User {
     pub id: u64,
-    pub sender: Option<Arc<UnboundedSender<(EventId, Arc<dyn IEventData>)>>>,
+    pub sender: Option<UnboundedSender<(EventId, Arc<dyn IEventData>)>>,
 
     pub info: UserInfo,
     pub inventory: [ItemId; 30],
@@ -21,10 +26,7 @@ pub struct User {
 }
 
 impl User {
-    pub async fn verify_credentials(
-        username: &str,
-        password: &str,
-    ) -> Result<u64, UserError> {
+    pub async fn verify_credentials(username: &str, password: &str) -> Result<u64, UserError> {
         let pool = crate::gateway::GET_DATABASE().await;
 
         let Some(user) = pool.get_user_authentication_info(username).await else {
@@ -57,10 +59,7 @@ impl User {
         }
     }
 
-    pub async fn request_user(
-        id: u64,
-        request_inventory: bool,
-    ) -> Result<Self, UserError> {
+    pub async fn request_user(id: u64, request_inventory: bool) -> Result<Self, UserError> {
         let pool = crate::gateway::GET_DATABASE().await;
 
         let Some(user) = pool.get_user_by_id(id).await else {
@@ -99,9 +98,7 @@ impl User {
         Ok(user)
     }
 
-    pub async fn save(
-        &self,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn save(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let pool = crate::gateway::GET_DATABASE().await;
 
         pool.save_user(&[&self.info]).await
@@ -118,15 +115,11 @@ impl User {
         self.info = user;
     }
 
-    pub fn set_sender(&mut self, sender: Arc<UnboundedSender<(EventId, Arc<dyn IEventData>)>>) {
-        self.sender = Some(sender);
-    }
-
     pub fn set_music_list(&mut self, music_list: Vec<MusicIdEntry>) {
         self.music_list = music_list;
     }
 
-    pub fn get_sender(&self) -> &Arc<UnboundedSender<(EventId, Arc<dyn IEventData>)>> {
+    pub fn get_sender(&self) -> &UnboundedSender<(EventId, Arc<dyn IEventData>)> {
         self.sender.as_ref().expect("Sender not set for user")
     }
 
@@ -178,31 +171,4 @@ impl Eq for User {}
 pub enum UserError {
     InvalidCredentials,
     Error(String),
-}
-
-#[derive(Debug, Clone, Copy, encoder::StructSerializer, Default)]
-pub enum ItemInfo {
-    #[default]
-    Instrument = 0,
-    Hair = 1,
-    Accessory = 2,
-    Glove = 3,
-    Necklace = 4,
-    Cloth = 5,
-    Pant = 6,
-    Glasses = 7,
-    Earring = 8,
-    ClothAccessory = 9,
-    Shoes = 10,
-    Face = 11,
-    Wing = 12,
-    InstrumentAccessory = 13,
-    Pet = 14,
-    HairAccessory = 15,
-}
-
-#[derive(Debug, Clone, Copy, encoder::StructSerializer, Default)]
-pub struct ItemId {
-    pub id: u32,
-    pub amount: u32,
 }

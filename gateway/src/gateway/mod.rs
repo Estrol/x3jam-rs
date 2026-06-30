@@ -5,19 +5,19 @@ pub mod ojnlist;
 pub mod routes;
 pub mod stateful;
 
-pub mod channel;
 pub mod client;
 pub mod itemlist;
-pub mod room;
-pub mod user;
 
 use std::sync::{Arc, OnceLock};
 
 use futures::FutureExt as _;
-use tokio::sync::Mutex;
-use tcpserver::{IClient, Server, pin};
+use tcpserver::{IClient, Server};
 
-use crate::gateway::{commands::EventId, events::IEventData, user::User};
+use crate::{
+    channel::{ChannelCommand, ChannelHandle},
+    gateway::{commands::EventId, events::IEventData},
+    user::User,
+};
 pub use client::Client;
 
 const HTTP_HEADERS: &[&[u8]] = &[
@@ -31,31 +31,6 @@ pub fn is_http_request(data: &[u8]) -> bool {
         }
     }
     false
-}
-
-pub fn dump_data<ID: Into<u16>, T: encoder::StructEncodeImpl>(event_id: ID, data: &T) -> Vec<u8> {
-    let data = encoder::get_buffer(data);
-    let mut result = Vec::new();
-
-    result.extend_from_slice(&[0xFF, 0xFF]); // Length placeholder
-    result.extend_from_slice(&(event_id.into() as u16).to_le_bytes());
-    result.extend_from_slice(&data);
-
-    let length = result.len() as u16;
-    result[0..2].copy_from_slice(&length.to_le_bytes());
-
-    result
-}
-
-pub fn print_data(data: &[u8]) {
-    println!("Data ({} bytes):", data.len());
-    for (i, byte) in data.iter().enumerate() {
-        if i % 16 == 0 {
-            print!("\n{:04X}: ", i);
-        }
-        print!("{:02X} ", byte);
-    }
-    println!();
 }
 
 static DATABASE: OnceLock<database::GameDatabase> = OnceLock::new();
@@ -187,28 +162,6 @@ pub async fn GET_DATABASE() -> &'static database::GameDatabase {
 }
 
 lazy_static::lazy_static! {
-    static ref CHANNELS: Mutex<Vec<channel::ChannelHandle>> = Mutex::new(Vec::new());
-}
-
-pub async fn setup_channel() {
-    const FILE: &str = "ojnlist.dat";
-    let mut channels = GET_CHANNELS().await;
-
-    for i in 0..10 {
-        let ch = channel::Channel::new(0, i, FILE)
-            .await
-            .expect("Failed to load channel data");
-
-        channels.push(channel::ChannelHandle(ch, 0, i));
-    }
-}
-
-#[allow(non_snake_case)]
-pub async fn GET_CHANNELS() -> tokio::sync::MutexGuard<'static, Vec<channel::ChannelHandle>> {
-    CHANNELS.lock().await
-}
-
-lazy_static::lazy_static! {
     static ref ITEM_LIST: OnceLock<itemlist::ItemList> = OnceLock::new();
 }
 
@@ -225,11 +178,24 @@ pub fn GET_ITEM_LIST() -> &'static itemlist::ItemList {
     ITEM_LIST.get().expect("Item list not initialized")
 }
 
+lazy_static::lazy_static! {
+    static ref CHANNELS: OnceLock<Vec<ChannelHandle>> = OnceLock::new();
+}
+
+#[allow(non_snake_case)]
+pub fn GET_CHANNELS() -> &'static Vec<ChannelHandle> {
+    CHANNELS.get().expect("Channels not initialized")
+}
+
+pub fn setup_channels(channels: Vec<ChannelHandle>) {
+    CHANNELS.set(channels).expect("Failed to set channels");
+}
+
 async fn process(client: &mut Client) {
     let (sender, receiver) =
         tokio::sync::mpsc::unbounded_channel::<(EventId, Arc<dyn IEventData>)>();
 
-    client.sender = Some(std::sync::Arc::new(sender));
+    client.sender = Some(sender.clone());
 
     if std::panic::AssertUnwindSafe(process_guard(client, receiver))
         .catch_unwind()
@@ -239,30 +205,25 @@ async fn process(client: &mut Client) {
         println!("Client {} panicked during processing", client.id);
     }
 
-    if let Some(room) = client.room() {
-        let mut room = room.lock().await;
-
+    if let Some((_, channel)) = client.channel() {
         if let Some(user) = client.user() {
-            let _ = room.remove_client(&user).await;
+            let _ = channel
+                .send::<bool>(ChannelCommand::Disconnect { user_id: user.id })
+                .await;
         }
     }
 
-    if let Some(channel) = client.channel() {
-        let mut channel = channel.lock().await;
-
-        if let Some(user) = client.user() {
-            let _ = channel.remove_user(&user).await;
-        }
-    }
-
-    if client.session_entered && let Some(user) = client.user() {
+    if client.session_entered
+        && let Some(user) = client.user()
+    {
         User::delete_session(user.id).await;
     }
-
-    client.clear();
 }
 
-async fn process_guard(client: &mut Client, mut receiver: tokio::sync::mpsc::UnboundedReceiver<(EventId, Arc<dyn IEventData>)>) {
+async fn process_guard(
+    client: &mut Client,
+    mut receiver: tokio::sync::mpsc::UnboundedReceiver<(EventId, Arc<dyn IEventData>)>,
+) {
     'read_loop: loop {
         tokio::select! {
             result = receiver.recv() => {
@@ -314,15 +275,18 @@ async fn process_guard(client: &mut Client, mut receiver: tokio::sync::mpsc::Unb
     }
 }
 
-pub async fn run(token: tokio_util::sync::CancellationToken) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+pub async fn run(
+    token: tokio_util::sync::CancellationToken,
+    channels: Vec<ChannelHandle>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("Starting gateway server on port 16010...");
 
     setup_database().await;
-    setup_channel().await;
     setup_item_list().await;
+    setup_channels(channels);
 
     let server = Server::<Client>::new(tcpserver::AddressType::Any, 16010).await?;
-    server.run(token, pin!(process)).await?;
+    server.run(token, tcpserver::pin!(process)).await?;
 
     println!("Gateway server has shut down.");
 

@@ -1,4 +1,5 @@
-use crate::gateway::{commands::EventId, events::IEventData, room::GameEventType};
+use crate::{gateway::commands::EventId, room::GameEventType};
+
 
 #[derive(gateway_derive::Event, encoder::StructSerializer, Debug)]
 pub struct GameOnNoteEventEventArgs {
@@ -9,12 +10,10 @@ pub struct GameOnNoteEventEventArgs {
 }
 
 #[gateway_derive::event(EventId::GameOnNoteEvent)]
-pub async fn handle_game_on_note_event(client: &mut crate::gateway::Client, event: &dyn IEventData) {
-    let Some(data) = super::downcast::<GameOnNoteEventEventArgs>(event) else {
-        println!("Failed to downcast GameOnNoteEvent");
-        return;
-    };
-
+pub async fn handle_game_on_note_event(
+    client: &mut crate::gateway::Client,
+    data: &GameOnNoteEventEventArgs,
+) {
     client
         .send_packet(EventId::GameOnNoteEvent, data)
         .await
@@ -62,17 +61,15 @@ impl encoder::StructEncodeImpl for PlayerResult {
 }
 
 #[derive(gateway_derive::Event, encoder::StructSerializer)]
-pub struct ArrayResult {
+pub struct GameFinishEventArgs {
     pub results: Vec<PlayerResult>,
 }
 
 #[gateway_derive::event(EventId::GameOnFinish)]
-pub async fn handle_game_on_finish(client: &mut crate::gateway::Client, event: &dyn IEventData) {
-    let Some(data) = super::downcast::<ArrayResult>(event) else {
-        println!("Failed to downcast GameOnFinish");
-        return;
-    };
-
+pub async fn handle_game_on_finish(
+    client: &mut crate::gateway::Client,
+    data: &GameFinishEventArgs,
+) {
     client
         .send_packet(EventId::GameOnFinish, data)
         .await
@@ -85,12 +82,10 @@ pub struct GameOnLoadingReadyEventArgs {
 }
 
 #[gateway_derive::event(EventId::GameOnLoadingReady)]
-pub async fn handle_game_on_loading_ready(client: &mut crate::gateway::Client, event: &dyn IEventData) {
-    let Some(data) = super::downcast::<GameOnLoadingReadyEventArgs>(event) else {
-        println!("Failed to downcast GameOnLoadingReady");
-        return;
-    };
-
+pub async fn handle_game_on_loading_ready(
+    client: &mut crate::gateway::Client,
+    data: &GameOnLoadingReadyEventArgs,
+) {
     client
         .send_packet(EventId::GameOnLoadingReady, data)
         .await
@@ -104,12 +99,10 @@ pub struct GameOnPlayerLeaveEventArgs {
 }
 
 #[gateway_derive::event(EventId::GameOnPlayerLeave)]
-pub async fn handle_game_on_player_leave(client: &mut crate::gateway::Client, event: &dyn IEventData) {
-    let Some(data) = super::downcast::<GameOnPlayerLeaveEventArgs>(event) else {
-        println!("Failed to downcast GameOnPlayerLeave");
-        return;
-    };
-
+pub async fn handle_game_on_player_leave(
+    client: &mut crate::gateway::Client,
+    data: &GameOnPlayerLeaveEventArgs,
+) {
     client
         .send_packet(EventId::GameOnPlayerLeave, data)
         .await

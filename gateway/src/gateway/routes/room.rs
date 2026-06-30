@@ -1,7 +1,7 @@
-use std::sync::Arc;
-
-use crate::gateway::{
-    channel::CreateError, commands::ResponseId, room::{Modifiers, MusicId, RoomArena, RoomDifficulty, RoomMode, RoomSpeed, SkillId, TeamId, modifier::ModifierReport}
+use crate::{
+    channel::ChannelCommand, gateway::commands::ResponseId, room::{
+        ModifierReport, Modifiers, MusicId, RoomArena, RoomCommand, RoomDifficulty, RoomMode, RoomSpeed, RoomWeakHandle, SkillId, TeamId,
+    },
 };
 
 #[derive(Debug, Copy, Clone, encoder::StructSerializer)]
@@ -10,84 +10,65 @@ pub enum CreateRoomResult {
     Full = 1,
 }
 
-#[gateway_derive::route(RequestId::ListRoomCreateRoom)]
-async fn handle_create_room(client: &mut super::Client, packet: &mut super::Packet) {
-    let Some(user) = client.user.as_ref() else {
-        println!("Client is not logged in");
-        return;
-    };
+#[derive(encoder::StructDeserializer)]
+struct CreateRoomRequest {
+    title: std::ffi::CString,
+    mode: RoomMode,
+    password: Option<std::ffi::CString>,
+    min_level: u8,
+    max_level: u8,
+}
 
-    let Some(channel) = client.channel() else {
+#[derive(encoder::StructSerializer)]
+struct CreateRoomResponse {
+    result: CreateRoomResult,
+    room_id: u32,
+    premium: bool,
+}
+
+#[gateway_derive::route(RequestId::ListRoomCreateRoom)]
+async fn handle_create_room(client: &mut super::Client, request: &CreateRoomRequest) {
+    let Some((user_id, channel)) = client.channel() else {
         println!("Client is not in a channel");
         return;
     };
 
-    #[derive(encoder::StructDeserializer)]
-    struct CreateRoomRequest {
-        title: std::ffi::CString,
-        mode: RoomMode,
-        password: Option<std::ffi::CString>,
-        min_level: u8,
-        max_level: u8,
-    }
+    let title = request.title.to_string_lossy().to_string();
+    let password = request
+        .password
+        .clone()
+        .map(|p| p.to_string_lossy().to_string());
+    let mode = request.mode;
+    let min_level = request.min_level;
+    let max_level = request.max_level;
 
-    #[derive(encoder::StructSerializer)]
-    struct CreateRoomResponse {
-        result: CreateRoomResult,
-        room_id: u32,
-        premium: bool,
-    }
+    let Ok((result, data)) = channel
+        .send::<(CreateRoomResult, Option<RoomWeakHandle>)>(ChannelCommand::CreateRoom {
+            user_id,
+            name: title,
+            password,
+            mode,
+            min_level,
+            max_level,
+        })
+        .await
+    else {
+        println!("Failed to send create room command to channel");
+        return;
+    };
 
-    match super::parse_request::<CreateRoomRequest>(&packet.body) {
-        Ok(request) => {
-            let title = request.title.to_string_lossy().to_string();
-            let password = request.password.map(|p| p.to_string_lossy().to_string());
-            let mode = request.mode;
-            let min_level = request.min_level;
-            let max_level = request.max_level;
+    let response = CreateRoomResponse {
+        result,
+        room_id: data.as_ref().map(|handle| handle.id).unwrap_or(0),
+        premium: false,
+    };
 
-            let room = {
-                let mut channel = channel.lock().await;
+    client.room_handle = data;
 
-                channel
-                    .create_room(user, title.clone(), password.clone(), mode, min_level, max_level)
-                    .await
-            };
-            
-            match room
-            {
-                Ok((id, room)) => {
-                    let response = CreateRoomResponse {
-                        result: CreateRoomResult::Success,
-                        room_id: id,
-                        premium: false,
-                    };
-
-                    client.room = Some(Arc::downgrade(&room));
-
-                    client
-                        .send_packet(ResponseId::ListRoomCreateRoom, &response)
-                        .await
-                        .expect("Failed to send create room response");
-                }
-                Err(CreateError::ChannelFull) => {
-                    let response = CreateRoomResponse {
-                        result: CreateRoomResult::Full,
-                        room_id: 0,
-                        premium: false,
-                    };
-
-                    client
-                        .send_packet(ResponseId::ListRoomCreateRoom, &response)
-                        .await
-                        .expect("Failed to send create room response");
-                }
-            }
-        }
-        Err(e) => {
-            println!("[Error] Failed to parse create room request: {}", e);
-        }
-    }
+    client
+        .send_packet(ResponseId::ListRoomCreateRoom, &response)
+        .await
+        .expect("Failed to send create room response");
 }
 
 #[derive(encoder::StructDeserializer, encoder::StructSerializer)]
@@ -98,85 +79,70 @@ pub struct SetRoomMusic {
 }
 
 #[gateway_derive::route(RequestId::RoomSetMusicId)]
-async fn handle_set_room_music(client: &mut super::Client, packet: &mut super::Packet) {
-    let Some(room) = client.room() else {
-        println!("Client is not in a room");
+async fn handle_set_room_music(client: &mut super::Client, packet: &SetRoomMusic) {
+    let Some((_, channel)) = client.room() else {
+        println!("Client is not in a channel");
         return;
     };
 
-    match super::parse_request::<SetRoomMusic>(&packet.body) {
-        Ok(request) => {
-            let mut room = room.lock().await;
-            room.set_song_id(request.id, request.difficulty, request.speed)
-                .await;
-        }
-        Err(e) => {
-            println!("[Error] Failed to parse set room music request: {}", e);
-        }
-    }
+    channel
+        .send::<()>(RoomCommand::SetMusicId {
+            music_id: packet.id,
+            difficulty: packet.difficulty,
+            speed: packet.speed,
+        })
+        .await
+        .expect("Failed to send set music id command to channel");
 }
 
 #[gateway_derive::route(RequestId::RoomSetArena)]
-async fn handle_set_room_arena(client: &mut super::Client, packet: &mut super::Packet) {
-    let Some(room) = client.room() else {
-        println!("Client is not in a room");
+async fn handle_set_room_arena(client: &mut super::Client, packet: &RoomArena) {
+    let Some((_, channel)) = client.room() else {
+        println!("Client is not in a channel");
         return;
     };
 
-    match super::parse_request::<RoomArena>(&packet.body) {
-        Ok(arena) => {
-            let mut room = room.lock().await;
-            room.set_arena(arena, arena.contains(RoomArena::RANDOM_FLAG));
-        }
-        Err(e) => {
-            println!("[Error] Failed to parse set room arena request: {}", e);
-        }
-    }
+    channel
+        .send::<()>(RoomCommand::SetArena {
+            arena: *packet,
+        })
+        .await
+        .expect("Failed to send set arena command to channel");
 }
 
 #[gateway_derive::route(RequestId::RoomSetTeam)]
-async fn handle_set_room_team(client: &mut super::Client, packet: &mut super::Packet) {
-    let Some(room) = client.room() else {
-        println!("Client is not in a room");
+async fn handle_set_room_team(client: &mut super::Client, packet: &TeamId) {
+    let Some((user_id, channel)) = client.room() else {
+        println!("Client is not in a channel");
         return;
     };
 
-    let Some(user) = client.user.as_ref() else {
-        println!("Client is not logged in");
-        return;
-    };
-
-    match super::parse_request::<TeamId>(&packet.body) {
-        Ok(team_id) => {
-            let mut room = room.lock().await;
-            room.set_team(user, team_id).await;
-        }
-        Err(e) => {
-            println!("[Error] Failed to parse set room team request: {}", e);
-        }
-    }
+    channel
+        .send::<()>(RoomCommand::SetTeam {
+            user_id,
+            team: *packet,
+        })
+        .await
+        .expect("Failed to send set team command to channel");
 }
 
 #[gateway_derive::route(RequestId::RoomSetSkill)]
-async fn handle_set_room_ring(client: &mut super::Client, packet: &mut super::Packet) {
-    let Some(room) = client.room() else {
-        println!("Client is not in a room");
+async fn handle_set_room_ring(client: &mut super::Client, packet: &Vec<SkillId>) {
+    let Some((_, channel)) = client.room() else {
+        println!("Client is not in a channel");
         return;
     };
 
-    match super::parse_request::<Vec<SkillId>>(&packet.body) {
-        Ok(ring) => {
-            let mut room = room.lock().await;
-            room.set_ring(ring).await;
-        }
-        Err(e) => {
-            println!("[Error] Failed to parse set room ring request: {}", e);
-        }
-    }
+    channel
+        .send::<()>(RoomCommand::SetSkills {
+            skills: packet.clone(),
+        })
+        .await
+        .expect("Failed to send set skills command to channel");
 }
 
 #[repr(i32)]
-#[derive(Debug, Copy, Clone, encoder::StructSerializer)]
+#[derive(Debug, Copy, Clone, encoder::StructSerializer, PartialEq, Eq)]
 pub enum GameStartResult {
     Success = 0,
     NotAllReady = 1,
@@ -184,94 +150,70 @@ pub enum GameStartResult {
 }
 
 #[gateway_derive::route(RequestId::GameStart)]
-async fn handle_start_game(client: &mut super::Client, _packet: &mut super::Packet) {
-    let Some(room) = client.room() else {
-        println!("Client is not in a room");
+async fn handle_start_game(client: &mut super::Client, _packet: &()) {
+    let Some((user_id, channel)) = client.room() else {
+        println!("Client is not in a channel");
         return;
     };
 
-    let Some(user) = client.user.as_ref() else {
-        println!("Client is not logged in");
-        return;
-    };
-
-    let result = {
-        let mut room = room.lock().await;
-
-        if !room.is_host(user) {
-            GameStartResult::NotHost
-        } else if !room.is_all_ready() {
-            GameStartResult::NotAllReady
-        } else {
-            return room.game_start().await;
-        }
-    };
-
-    client
-        .send_packet(ResponseId::GameStart, &result)
+    let result = channel
+        .send::<GameStartResult>(RoomCommand::StartGame {
+            user_id,
+        })
         .await
-        .expect("Failed to send game start response");
+        .expect("Failed to send start game command to channel");
+
+    if result != GameStartResult::Success {
+        client
+            .send_packet(ResponseId::GameStart, &result)
+            .await
+            .expect("Failed to send game start response");
+    }
 }
 
 #[gateway_derive::route(RequestId::RoomNameChange)]
-async fn handle_change_title(client: &mut super::Client, packet: &mut super::Packet) {
-    let Some(room) = client.room() else {
-        println!("Client is not in a room");
+async fn handle_change_title(client: &mut super::Client, packet: &std::ffi::CString) {
+    let Some((_, channel)) = client.room() else {
+        println!("Client is not in a channel");
         return;
     };
 
-    match super::parse_request::<std::ffi::CString>(&packet.body) {
-        Ok(title) => {
-            let title = title.to_string_lossy().to_string();
+    let title = packet.to_string_lossy().to_string();
 
-            let mut room = room.lock().await;
-            room.set_name(&title).await;
-        }
-        Err(e) => {
-            println!("[Error] Failed to parse change title request: {}", e);
-        }
-    }
+    channel
+        .send::<()>(RoomCommand::SetName {
+            name: title,
+        })
+        .await
+        .expect("Failed to send set name command to channel");
 }
 
 #[gateway_derive::route(RequestId::RoomSetReady)]
-async fn handle_set_ready(client: &mut super::Client, _packet: &mut super::Packet) {
-    let Some(room) = client.room() else {
-        println!("Client is not in a room");
+async fn handle_set_ready(client: &mut super::Client, _packet: &()) {
+    let Some((user_id, channel)) = client.room() else {
+        println!("Client is not in a channel");
         return;
     };
 
-    let Some(user) = client.user.as_ref() else {
-        println!("Client is not logged in");
-        return;
-    };
-
-    let mut room = room.lock().await;
-    room.set_ready(user).await;
+    channel
+        .send::<()>(RoomCommand::SetReady { user_id })
+        .await
+        .expect("Failed to send set ready command to channel");
 }
 
 #[gateway_derive::route(RequestId::RoomChat)]
-async fn handle_room_chat(client: &mut super::Client, packet: &mut super::Packet) {
-    let Some(room) = client.room() else {
-        println!("Client is not in a room");
+async fn handle_room_chat(client: &mut super::Client, packet: &std::ffi::CString) {
+    let Some((user_id, channel)) = client.room() else {
+        println!("Client is not in a channel");
         return;
     };
 
-    let Some(user) = client.user.as_ref() else {
-        println!("Client is not logged in");
-        return;
-    };
+    let message = packet.to_string_lossy().to_string();
 
-    match super::parse_request::<std::ffi::CString>(&packet.body) {
-        Ok(message) => {
-            let message = message.to_string_lossy().to_string();
-
-            let mut room = room.lock().await;
-            room.on_chat(user, &message).await;
-        }
-        Err(e) => {
-            println!("[Error] Failed to parse room chat request: {}", e);
-        }
-    }
+    channel
+        .send::<()>(RoomCommand::RoomChat { user_id, message })
+        .await
+        .expect("Failed to send room chat command to channel");
 }
 
 #[derive(encoder::StructDeserializer)]
@@ -281,37 +223,32 @@ struct SetModifierRequest {
 }
 
 #[gateway_derive::route(RequestId::RoomSetModifier)]
-async fn handle_set_modifier(client: &mut super::Client, packet: &mut super::Packet) {
-    let Some(room) = client.room() else {
-        println!("Client is not in a room");
+async fn handle_set_modifier(client: &mut super::Client, packet: &SetModifierRequest) {
+    let Some((_, channel)) = client.room() else {
+        println!("Client is not in a channel");
         return;
     };
 
-    match super::parse_request::<SetModifierRequest>(&packet.body) {
-        Ok(request) => {
-            let mut room = room.lock().await;
-            room.set_modifier(request.modifier, request.value).await;
-        }
-        Err(e) => {
-            println!("[Error] Failed to parse set modifier request: {}", e);
-        }
-    }
+    channel
+        .send::<()>(RoomCommand::SetModifier {
+            modifier: packet.modifier,
+            value: packet.value,
+        })
+        .await
+        .expect("Failed to send set modifier command to channel");
 }
 
 #[gateway_derive::route(RequestId::RoomSetAllModifiers)]
-async fn handle_set_all_modifiers(client: &mut super::Client, packet: &mut super::Packet) {
-    let Some(room) = client.room() else {
-        println!("Client is not in a room");
+async fn handle_set_all_modifiers(client: &mut super::Client, packet: &ModifierReport) {
+    let Some((_, channel)) = client.room() else {
+        println!("Client is not in a channel");
         return;
     };
 
-    match super::parse_request::<ModifierReport>(&packet.body) {
-        Ok(modifiers) => {
-            let mut room = room.lock().await;
-            room.set_all_modifiers(modifiers).await;
-        }
-        Err(e) => {
-            println!("[Error] Failed to parse set all modifiers request: {}", e);
-        }
-    }
+    channel
+        .send::<()>(RoomCommand::SetAllModifiers {
+            modifiers: packet.clone(),
+        })
+        .await
+        .expect("Failed to send set all modifiers command to channel");
 }

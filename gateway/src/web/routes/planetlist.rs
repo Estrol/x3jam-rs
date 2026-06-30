@@ -1,3 +1,1 @@
-pub async fn handle() -> impl axum::response::IntoResponse {
-    
-}
+pub async fn handle() -> impl axum::response::IntoResponse {}

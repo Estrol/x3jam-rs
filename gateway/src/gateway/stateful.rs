@@ -21,6 +21,10 @@ impl StatefulXor {
     pub fn get_position(&self) -> usize {
         self.position
     }
+
+    pub fn size(&self) -> usize {
+        KEY.len()
+    }
 }
 
 const KEY: [u8; 744] = [

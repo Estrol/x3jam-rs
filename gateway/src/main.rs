@@ -1,5 +1,8 @@
+pub mod channel;
 pub mod gateway;
+pub mod user;
 pub mod web;
+pub mod room;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -12,18 +15,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
         #[allow(unused_must_use)]
         async move {
+            let mut channels = Vec::new();
+            for i in 0..2 {
+                let Ok(handle) = channel::make_channel(token.clone(), 0, i, 1000, "OJNList.dat").await else {
+                    println!("Failed to create channel {}: {}", 0, i);
+                    continue;
+                };
+
+                channels.push(handle);
+            }
+
             tokio::join!(
-                gateway::run(token.clone()),
-                web::run(token)
+                gateway::run(token.clone(), channels),
+                web::run(token.clone())
             );
         }
     });
-    
+
     tokio::signal::ctrl_c().await?;
     token.cancel();
 
-    handle.await
-        .expect("Failed to join server tasks");
+    handle.await.expect("Failed to join server tasks");
 
     Ok(())
 }
@@ -41,12 +53,16 @@ pub fn print_logo() {
     use base64::Engine as _;
     use std::io::Read;
 
-    let logo_bytes = base64::engine::general_purpose::STANDARD.decode(LOGO_ZIP_BASE64).expect("Failed to decode base64 logo");
+    let logo_bytes = base64::engine::general_purpose::STANDARD
+        .decode(LOGO_ZIP_BASE64)
+        .expect("Failed to decode base64 logo");
 
     let mut decoder = flate2::read::GzDecoder::new(&logo_bytes[..]);
     let mut logo_string = String::new();
-    decoder.read_to_string(&mut logo_string).expect("Failed to decompress logo");
-    
+    decoder
+        .read_to_string(&mut logo_string)
+        .expect("Failed to decompress logo");
+
     println!("{}", logo_string);
     println!();
 }

@@ -1,10 +1,6 @@
-use crate::gateway::{
-    commands::ResponseId,
-    room::GameEventType,
-    routes::Packet,
-};
+use crate::{gateway::commands::ResponseId, room::{GameEventType, RoomCommand}};
 
-#[derive(encoder::StructDeserializer, Default)]
+#[derive(Clone, encoder::StructDeserializer)]
 pub struct ScoreSubmitRequest {
     pub cool: i16,
     pub good: i16,
@@ -14,51 +10,69 @@ pub struct ScoreSubmitRequest {
     pub jam_combo: i16,
     pub passed: i16,
     pub score: i32,
+    pub padding: u8,
+    pub arrangement: [u8; 7],
+    pub event_count: u32,
+    pub hp_graph: [u32; 500],
+    pub song_rate: f32,
+    pub timing_bpm: u32,
+    pub fln: u32,
+    pub sln: u32,
+    pub nln: u32,
 }
 
-#[derive(encoder::StructSerializer)]
-pub struct ScoreSubmitResponse {
-    slot: u8,
-    success: bool,
-}
-
-#[gateway_derive::route(RequestId::SubmitScore)]
-pub async fn handle_submit_score(client: &mut crate::gateway::Client, packet: &mut Packet) {
-    let Some(room) = client.room() else {
-        println!("Received SubmitScore request but client is not in a room");
-        return;
-    };
-
-    let Some(user) = client.user() else {
-        println!("Received SubmitScore request but client is not authenticated");
-        return;
-    };
-
-    match super::parse_request::<ScoreSubmitRequest>(&packet.body) {
-        Ok(request) => {
-            let response = {
-                let mut room = room.lock().await;
-
-                let (success, slot) = room.on_game_score_submit(&user, request).await;
-
-                ScoreSubmitResponse {
-                    slot: slot as u8,
-                    success, // False = forced kicked from game, true = score accepted
-                }
-            };
-
-            client
-                .send_packet(ResponseId::SubmitScore, &response)
-                .await
-                .expect("Failed to send SubmitScore response");
-        }
-        Err(e) => {
-            println!("Failed to parse SubmitScore request: {:?}", e);
+impl Default for ScoreSubmitRequest {
+    fn default() -> Self {
+        Self {
+            cool: 0,
+            good: 0,
+            bad: 0,
+            miss: 0,
+            max_combo: 0,
+            jam_combo: 0,
+            passed: 0,
+            score: 0,
+            arrangement: [0; 7],
+            event_count: 0,
+            padding: 0,
+            hp_graph: [0; 500],
+            song_rate: 0.0,
+            timing_bpm: 0,
+            fln: 0,
+            sln: 0,
+            nln: 0,
         }
     }
 }
 
-#[derive(Debug, encoder::StructDeserializer)]
+#[derive(encoder::StructSerializer)]
+pub struct ScoreSubmitResponse {
+    pub slot: u8,
+    pub success: bool,
+}
+
+#[gateway_derive::route(RequestId::SubmitScore)]
+pub async fn handle_submit_score(client: &mut crate::gateway::Client, packet: &ScoreSubmitRequest) {
+    let Some((user_id, room)) = client.room() else {
+        println!("Received SubmitScore request but client is not in a room");
+        return;
+    };
+    
+    let Ok(result) = room.send::<ScoreSubmitResponse>(RoomCommand::SubmitScore {
+        user_id,
+        score_request: packet.clone(),
+    }).await else {
+        println!("Failed to send SubmitScore command to room");
+        return;
+    };
+
+    client
+        .send_packet(ResponseId::SubmitScore, &result)
+        .await
+        .expect("Failed to send SubmitScore response");
+}
+
+#[derive(Debug, Clone, encoder::StructDeserializer)]
 pub struct GameEventPingRequest {
     pub r#type: GameEventType, // 2
     pub value: u16,            // 4
@@ -67,57 +81,44 @@ pub struct GameEventPingRequest {
 }
 
 #[gateway_derive::route(RequestId::GameNoteEvent)]
-pub async fn handle_game_on_note_event(client: &mut crate::gateway::Client, packet: &mut Packet) {
-    let Some(room) = client.room() else {
+pub async fn handle_game_on_note_event(client: &mut crate::gateway::Client, packet: &GameEventPingRequest) {
+    let Some((user_id, room)) = client.room() else {
         println!("Received GameOnNoteEvent request but client is not in a room");
         return;
     };
 
-    let Some(user) = client.user() else {
-        println!("Received GameOnNoteEvent request but client is not authenticated");
-        return;
-    };
-
-    match super::parse_request::<GameEventPingRequest>(&packet.body) {
-        Ok(request) => {
-            let mut room = room.lock().await;
-
-            room.on_game_event(&user, request).await;
-        }
-        Err(e) => {
-            println!("Failed to parse GameOnNoteEvent request: {:?}", e);
-        }
-    }
+    let _ = room.send::<()>(RoomCommand::GameEvent {
+        user_id,
+        event: packet.clone(),
+    })
+    .await;
 }
 
 #[gateway_derive::route(RequestId::GameConfirmLoaded)]
-pub async fn handle_game_confirm_loaded(client: &mut crate::gateway::Client, _packet: &mut Packet) {
-    let Some(room) = client.room() else {
+pub async fn handle_game_confirm_loaded(client: &mut crate::gateway::Client, _packet: &()) {
+    let Some((user_id, room)) = client.room() else {
         println!("Received GameConfirmLoaded request but client is not in a room");
         return;
     };
 
-    let Some(user) = client.user() else {
-        println!("Received GameConfirmLoaded request but client is not authenticated");
-        return;
-    };
-
-    room.lock().await.confirm_game_loaded(&user);
+    let _ = room.send::<()>(RoomCommand::ConfirmGameLoaded { user_id })
+        .await;
 }
 
 #[gateway_derive::route(RequestId::GameLeave)]
-pub async fn handle_game_leave(client: &mut crate::gateway::Client, _packet: &mut Packet) {
-    let Some(room) = client.room() else {
+pub async fn handle_game_leave(client: &mut crate::gateway::Client, _packet: &()) {
+    let Some((user_id, room)) = client.room() else {
         println!("Client is not in a room");
         return;
     };
 
-    let mut room = room.lock().await;
-
-    let Some(user) = client.user() else {
-        println!("Client is not authenticated");
+    let Ok(leaving_room) = room.send::<bool>(RoomCommand::LeaveGame { user_id })
+        .await else {
+        println!("Failed to send leave game command to room");
         return;
     };
 
-    room.leave_game(user).await;
+    if leaving_room {
+        client.room_handle = None;
+    }
 }

@@ -27,7 +27,7 @@ inventory::collect!(Event);
 
 pub async fn handle_event(client: &mut Client, event_id: EventId, data: Arc<dyn IEventData>) {
     client.begin().expect("Failed to begin event batch");
-    
+
     if let Some(event) = get_event(event_id) {
         (event.handler)(client, &*data).await;
     } else {

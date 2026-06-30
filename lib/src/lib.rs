@@ -107,7 +107,10 @@ pub struct Server<C: IClient + Send + Sync + 'static> {
 }
 
 impl<C: IClient + Send + Sync> Server<C> {
-    pub async fn new(addr: AddressType<'_>, port: u16) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn new(
+        addr: AddressType<'_>,
+        port: u16,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let bind_addr = match addr {
             AddressType::Any => format!("0.0.0.0:{}", port),
             AddressType::Address(a) => format!("{}:{}", a, port),

@@ -1,13 +1,12 @@
-use std::sync::Arc;
-
 use database::Equipment;
 
-use crate::gateway::{
-    channel::JoinError,
-    commands::{EventId, ResponseId},
-    itemlist::GameModifierType,
-    room::{MusicId, RoomArena, RoomDifficulty, RoomMode, RoomSpeed, RoomStatus, SkillId, TeamId, music::MusicIdEntry},
-    user::ItemId,
+use crate::{
+    channel::ChannelCommand, gateway::{
+        commands::{EventId, ResponseId},
+        itemlist::GameModifierType,
+    }, room::{
+        ModifierReport, MusicId, MusicIdEntry, RoomArena, RoomDifficulty, RoomHandle, RoomMode, RoomSpeed, RoomStatus, RoomWeakHandle, SkillId, TeamId,
+    }, user::{ItemId, User},
 };
 
 #[derive(encoder::StructSerializer)]
@@ -49,8 +48,8 @@ impl<T: encoder::StructEncodeImpl> encoder::StructEncodeImpl for VecU16<T> {
 }
 
 #[gateway_derive::route(RequestId::PlanetGetServerList)]
-async fn handle_server_list(client: &mut super::Client, _packet: &mut super::Packet) {
-    let Some(channel) = client.channel() else {
+async fn handle_server_list(client: &mut super::Client, _packet: &()) {
+    let Some((_, ch)) = client.channel() else {
         println!(
             "Client {} is not in a channel, cannot get server list",
             client.id
@@ -58,110 +57,98 @@ async fn handle_server_list(client: &mut super::Client, _packet: &mut super::Pac
         return;
     };
 
-    let list = {
-        let channel = channel.lock().await;
-
-        channel.get_music_list()
+    let Ok(list) = ch
+        .send::<Vec<ServerMusicEntry>>(ChannelCommand::RequestServerList)
+        .await
+    else {
+        println!(
+            "Failed to get server list for channel: {}:{}",
+            ch.region(),
+            ch.id()
+        );
+        return;
     };
 
-    let list = VecU16::new(list);
+    let response = VecU16::new(list);
 
     client
-        .send_packet(ResponseId::PlanetGetServerList, &list)
+        .send_packet(ResponseId::PlanetGetServerList, &response)
         .await
         .expect("Failed to send server list response");
 }
 
 #[gateway_derive::route(RequestId::ListRoomGetPlayerList)]
-async fn handle_client_list(client: &mut super::Client, packet: &mut super::Packet) {
-    let Some(channel) = client.channel() else {
+async fn handle_client_list(client: &mut super::Client, packet: &Vec<MusicIdEntry>) {
+    let Some((user_id, ch)) = client.channel() else {
         println!(
-            "Client {} is not in a channel, cannot get client list",
+            "Client {} is not in a channel, cannot get server list",
             client.id
         );
         return;
     };
 
-    match super::parse_request::<Vec<MusicIdEntry>>(&packet.body) {
-        Ok(client_ids) => {
-            let compatible_client_ids = {
-                let server_lists = channel.lock().await.list.clone();
+    let Some(user) = client.user() else {
+        println!(
+            "Client {} is not logged in, cannot get client list",
+            client.id
+        );
 
-                let mut compatible_client_ids = Vec::new();
+        return;
+    };
 
-                for music_id in client_ids.iter() {
-                    let id = music_id.songid.0 as i32;
-                    if server_lists.iter().any(|entry| entry.songid == id as i32) {
-                        compatible_client_ids.push(*music_id);
-                    }
-                }
-
-                compatible_client_ids
-            };
-
-            println!(
-                "Client {} requested client list with {} entries, {} of them are compatible",
-                client.id,
-                client_ids.len(),
-                compatible_client_ids.len()
-            );
-
-            let Some(user) = client.user() else {
-                println!(
-                    "Client {} is not logged in, cannot get client list",
-                    client.id
-                );
-                return;
-            };
-
-            user.set_music_list(compatible_client_ids);
-        }
-        Err(e) => {
-            println!("[Error] Failed to parse client list request: {}", e);
-        }
-    }
+    ch.send::<()>(ChannelCommand::SetClientList {
+        user_id: user.info.id,
+        client_ids: packet.clone(),
+    })
+    .await
+    .expect("Failed to send client list to channel");
 }
 
 #[gateway_derive::route(RequestId::ListRoomSyncInfo)]
-async fn handle_sync_info(client: &mut super::Client, _packet: &mut super::Packet) {
+async fn handle_sync_info(client: &mut super::Client, _packet: &()) {
     #[derive(encoder::StructSerializer)]
     struct SyncGoldCurrencyResponse {
         gem: u32,
     }
 
-    if let Some(user) = client.user() {
-        // Since we use cached value, we use this route to sync the user info with the database.
-        user.sync().await;
+    let id = client.user().map(|u| u.info.id).unwrap_or(0);
 
-        let response = SyncGoldCurrencyResponse {
-            gem: user.info.o2gems,
-        };
+    let Some((user_id, ch)) = client.channel() else {
+        println!("Client {} is not in a channel, cannot sync info", client.id);
+        return;
+    };
 
-        client
-            .send_packet(ResponseId::ListRoomSyncGems, &response)
-            .await
-            .expect("Failed to send sync currency response");
-    }
+    let Ok(user) = ch
+        .send::<User>(ChannelCommand::SyncUserInfo { user_id: id })
+        .await
+    else {
+        println!(
+            "Failed to sync user info for client {}: user not found",
+            client.id
+        );
+        return;
+    };
+
+    let response = SyncGoldCurrencyResponse {
+        gem: user.info.o2gems,
+    };
+
+    client.user = Some(user);
+
+    client
+        .send_packet(ResponseId::ListRoomSyncGems, &response)
+        .await
+        .expect("Failed to send sync currency response");
 }
 
-#[gateway_derive::route(RequestId::ShopLeave)]
-async fn enter_shop(_client: &mut super::Client, _packet: &mut super::Packet) {
-    // The game sends this packet when the player opens the shop, but it doesn't seem to expect a response for it, so we just ignore it.
-}
-
-#[gateway_derive::route(RequestId::ShopEnter)]
-async fn leave_shop(_client: &mut super::Client, _packet: &mut super::Packet) {
-    // The game sends this packet when the player closes the shop, but it doesn't seem to expect a response for it, so we just ignore it.
-}
-
-#[derive(encoder::StructSerializer)]
+#[derive(Debug, encoder::StructSerializer)]
 pub struct UserInfoEntry {
     pub username: std::ffi::CString,
     pub nickname: std::ffi::CString,
     pub level: u32,
 }
 
-#[derive(encoder::StructSerializer, Clone)]
+#[derive(Debug, encoder::StructSerializer, Clone)]
 pub struct RoomEntry {
     pub id: u32,
     pub state: RoomStatus,
@@ -203,13 +190,13 @@ impl std::default::Default for RoomEntry {
 }
 
 #[gateway_derive::route(RequestId::ListRoomGetRoomList)]
-async fn handle_get_room_list(client: &mut super::Client, _packet: &mut super::Packet) {
+async fn handle_get_room_list(client: &mut super::Client, _packet: &()) {
     // For some reason, the game didnt send the GetPlayerList request,
     // but it still expects a response for it, so we just send the list
     // in the GetRoom response, which seems to work fine.
     // Maybe the client is just weirdly coded and expects the player list in the GetRoom response?
 
-    let Some(channel) = client.channel() else {
+    let Some((_, channel)) = client.channel() else {
         println!(
             "Client {} is not in a channel, cannot get room list",
             client.id
@@ -217,10 +204,16 @@ async fn handle_get_room_list(client: &mut super::Client, _packet: &mut super::P
         return;
     };
 
-    let (users, rooms) = {
-        let channel = channel.lock().await;
+    let get_rooms_fut = channel.send::<Vec<RoomEntry>>(ChannelCommand::GetRooms);
+    let get_users_fut = channel.send::<Vec<UserInfoEntry>>(ChannelCommand::GetUsers);
 
-        tokio::join!(channel.get_users(), channel.get_rooms())
+    let (Ok(rooms), Ok(users)) = tokio::join!(get_rooms_fut, get_users_fut) else {
+        println!(
+            "Failed to get room or user list for channel: {}:{}",
+            channel.region(),
+            channel.id()
+        );
+        return;
     };
 
     client
@@ -234,8 +227,33 @@ async fn handle_get_room_list(client: &mut super::Client, _packet: &mut super::P
         .expect("Failed to send room list response");
 }
 
+#[gateway_derive::route(RequestId::ListRoomGetPlayerList)]
+async fn handle_get_player_list(client: &mut super::Client, _packet: &()) {
+    let Some((_, channel)) = client.channel() else {
+        println!(
+            "Client {} is not in a channel, cannot get player list",
+            client.id
+        );
+        return;
+    };
+
+    let Ok(users) = channel.send::<Vec<UserInfoEntry>>(ChannelCommand::GetUsers).await else {
+        println!(
+            "Failed to get user list for channel: {}:{}",
+            channel.region(),
+            channel.id()
+        );
+        return;
+    };
+
+    client
+        .send_packet(ResponseId::ListRoomGetPlayerList, &users)
+        .await
+        .expect("Failed to send player list response");
+}
+
 #[gateway_derive::route(RequestId::ListRoomGetCharacter)]
-async fn handle_get_character(client: &mut super::Client, _packet: &mut super::Packet) {
+async fn handle_get_character(client: &mut super::Client, _packet: &()) {
     let Some(user) = client.user() else {
         println!(
             "Client {} is not logged in, cannot get character info",
@@ -328,7 +346,7 @@ pub struct JoinRoomRequest {
 }
 
 #[repr(i32)]
-#[derive(Copy, Clone, encoder::StructSerializer)]
+#[derive(Copy, Clone, encoder::StructSerializer, PartialEq, Eq)]
 pub enum JoinErrorCode {
     Success = 0,
     GenericError = -1,
@@ -340,231 +358,169 @@ pub enum JoinErrorCode {
     NoPass = -7,
 }
 
+#[derive(encoder::StructSerializer)]
+pub struct MemberInfo {
+    pub nickname: std::ffi::CString,
+    pub level: u32,
+    pub gender: u8,
+    pub is_room_master: bool,
+    pub color: TeamId,
+    pub ready: bool,
+    pub unk: u8,
+    pub equipment: Equipment,
+    pub list: Vec<MusicIdEntry>,
+}
+
+#[derive(encoder::StructSerializer, Clone, Copy, PartialEq, Eq)]
+pub enum PositionStatus {
+    Empty = 0,
+    Occupied = 1,
+    Locked = 2,
+}
+
+pub struct PositionInfo {
+    pub position: u8,
+    pub status: PositionStatus,
+    pub member: Option<MemberInfo>,
+}
+
+impl encoder::StructEncodeImpl for PositionInfo {
+    fn impl_encode(&self, writer: &mut impl std::io::Write) -> std::io::Result<()> {
+        use byteorder_lite::WriteBytesExt as _;
+
+        writer.write_u8(self.position)?;
+        writer.write_u32::<byteorder_lite::LittleEndian>(self.status as u32)?;
+
+        if self.status == PositionStatus::Occupied {
+            if let Some(member) = &self.member {
+                member.impl_encode(writer)?;
+            } else {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "Position is occupied but member info is missing",
+                ));
+            }
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(encoder::StructSerializer)]
+pub struct JoinRoomResponse {
+    pub result: JoinErrorCode,
+    pub slot: u8,
+    pub team: TeamId,
+    pub name: std::ffi::CString,
+    pub music_id: MusicId,
+    pub arena: RoomArena,
+    pub mode: RoomMode,
+    pub diffculty: RoomDifficulty,
+    pub speed: RoomSpeed,
+    pub user_count: u32,
+    pub slots: [PositionInfo; 7],
+    pub skills: Vec<SkillId>,
+    pub premium: u16,
+}
+
+const DEFAULT_ROOM_NAME: &std::ffi::CStr = c"PlaceHolder Room Name";
+
+impl JoinRoomResponse {
+    pub fn new() -> Self {
+        Self {
+            result: JoinErrorCode::GenericError,
+            slot: 0,
+            team: TeamId::Blue,
+            name: DEFAULT_ROOM_NAME.to_owned(),
+            music_id: MusicId(0),
+            arena: RoomArena::ARENA1,
+            mode: RoomMode::Solo,
+            diffculty: RoomDifficulty::Easy,
+            speed: RoomSpeed::Speed05,
+            user_count: 0,
+            slots: [const {
+                PositionInfo {
+                    position: 0,
+                    status: PositionStatus::Empty,
+                    member: None,
+                }
+            }; 7],
+            skills: Vec::new(),
+            premium: 0,
+        }
+    }
+}
+
+impl JoinRoomResponse {
+    pub fn user_not_found() -> Self {
+        Self {
+            result: JoinErrorCode::GenericError,
+            ..Self::new()
+        }
+    }
+
+    pub fn room_not_found() -> Self {
+        Self {
+            result: JoinErrorCode::GenericError,
+            ..Self::new()
+        }
+    }
+
+    pub fn invalid_password() -> Self {
+        Self {
+            result: JoinErrorCode::InvalidPassword,
+            ..Self::new()
+        }
+    }
+
+    pub fn room_full() -> Self {
+        Self {
+            result: JoinErrorCode::RoomFull,
+            ..Self::new()
+        }
+    }
+}
+
 #[gateway_derive::route(RequestId::ListRoomJoinRoom)]
-async fn handle_join_room(client: &mut super::Client, packet: &mut super::Packet) {
-    let Some(channel) = client.channel() else {
+async fn handle_join_room(client: &mut super::Client, packet: &JoinRoomRequest) {
+    let Some((user_id, ch)) = client.channel() else {
         println!("Client {} is not in a channel, cannot join room", client.id);
         return;
     };
 
-    let Some(user) = client.user() else {
-        println!("Client {} is not logged in, cannot join room", client.id);
+    let password_option = if packet.password.to_bytes_with_nul().len() > 0 {
+        Some(packet.password.to_string_lossy().to_string())
+    } else {
+        None
+    };
+
+    let Ok((response, data)) = ch
+        .send::<(JoinRoomResponse, Option<(RoomWeakHandle, ModifierReport)>)>(ChannelCommand::JoinRoom {
+            user_id,
+            room_id: packet.room_id,
+            password: password_option,
+        })
+        .await
+    else {
+        println!(
+            "Failed to join room {} for client {}",
+            packet.room_id, client.id
+        );
         return;
     };
 
-    match super::parse_request::<JoinRoomRequest>(&packet.body) {
-        Ok(request) => {
-            let result = {
-                let mut channel = channel.lock().await;
-                let password = request.password.to_string_lossy().to_string();
+    client
+        .send_packet(ResponseId::ListRoomJoinRoom, &response)
+        .await
+        .expect("Failed to send join room response");
 
-                channel.join_room(user, request.room_id, password).await
-            };
+    if let Some((handle, modifier)) = data {
+        client.room_handle = Some(handle);
 
-            match result {
-                Ok((room, slot, team)) => {
-                    #[derive(encoder::StructSerializer)]
-                    pub struct MemberInfo {
-                        nickname: std::ffi::CString,
-                        level: u32,
-                        gender: u8,
-                        is_room_master: bool,
-                        color: TeamId,
-                        ready: bool,
-                        unk: u8,
-                        equipment: Equipment,
-                        list: Vec<MusicIdEntry>,
-                    }
-
-                    #[derive(encoder::StructSerializer, Clone, Copy, PartialEq, Eq)]
-                    pub enum PositionStatus {
-                        Empty = 0,
-                        Occupied = 1,
-                        Locked = 2,
-                    }
-
-                    struct PositionInfo {
-                        position: u8,
-                        status: PositionStatus,
-                        member: Option<MemberInfo>,
-                    }
-
-                    impl encoder::StructEncodeImpl for PositionInfo {
-                        fn impl_encode(
-                            &self,
-                            writer: &mut impl std::io::Write,
-                        ) -> std::io::Result<()> {
-                            use byteorder_lite::WriteBytesExt as _;
-
-                            writer.write_u8(self.position)?;
-                            writer.write_u32::<byteorder_lite::LittleEndian>(self.status as u32)?;
-
-                            if self.status == PositionStatus::Occupied {
-                                if let Some(member) = &self.member {
-                                    member.impl_encode(writer)?;
-                                } else {
-                                    return Err(std::io::Error::new(
-                                        std::io::ErrorKind::InvalidData,
-                                        "Position is occupied but member info is missing",
-                                    ));
-                                }
-                            }
-
-                            Ok(())
-                        }
-                    }
-
-                    #[derive(encoder::StructSerializer)]
-                    struct JoinRoomResponse {
-                        result: JoinErrorCode,
-                        slot: u8,
-                        team: TeamId,
-                        name: std::ffi::CString,
-                        music_id: MusicId,
-                        arena: RoomArena,
-                        mode: RoomMode,
-                        diffculty: RoomDifficulty,
-                        speed: RoomSpeed,
-                        user_count: u32,
-                        slots: [PositionInfo; 7],
-                        skills: Vec<SkillId>,
-                        premium: u16,
-                    }
-
-                    let (response, modifier) = {
-                        let room = room.lock().await;
-
-                        let mut slots = [const {
-                            PositionInfo {
-                                position: 0,
-                                status: PositionStatus::Empty,
-                                member: None,
-                            }
-                        }; 7];
-
-                        let mut index = 0;
-                        let modifier = room.get_modifier_report();
-
-                        for (i, user) in room.players.iter().enumerate() {
-                            if i == slot as usize {
-                                continue;
-                            }
-
-                            let slot = &mut slots[index];
-                            slot.position = i as u8;
-
-                            match user {
-                                crate::gateway::room::UserSlot::Available => {
-                                    slot.status = PositionStatus::Empty
-                                }
-                                crate::gateway::room::UserSlot::User {
-                                    team,
-                                    host,
-                                    ready,
-                                    user,
-                                    ..
-                                } => {
-                                    slot.status = PositionStatus::Occupied;
-
-                                    let nickname = std::ffi::CString::new(user.nickname())
-                                        .unwrap_or_else(|_| {
-                                            std::ffi::CString::new("InvalidNickname").unwrap()
-                                        });
-
-                                    let member_info = MemberInfo {
-                                        nickname,
-                                        level: user.level(),
-                                        gender: 1,
-                                        is_room_master: *host,
-                                        color: *team,
-                                        ready: *ready,
-                                        unk: 0,
-                                        equipment: user.equipment(),
-                                        list: user.music_list(),
-                                    };
-
-                                    slot.member = Some(member_info);
-                                }
-                                crate::gateway::room::UserSlot::Locked => {
-                                    slot.status = PositionStatus::Locked
-                                }
-                            }
-
-                            index += 1;
-                        }
-
-                        (
-                            JoinRoomResponse {
-                                result: JoinErrorCode::Success,
-                                slot: slot as u8,
-                                team: team,
-                                name: std::ffi::CString::new(room.title.clone()).unwrap_or_default(),
-                                music_id: room.music_id,
-                                arena: room.arena,
-                                mode: room.mode,
-                                diffculty: room.difficulty,
-                                speed: room.speed,
-                                user_count: 7,
-                                slots,
-                                skills: room.skill_slot.clone(),
-                                premium: 0,
-                            },
-                            modifier
-                        )
-                    };
-
-                    client.room = Some(Arc::downgrade(&room));
-
-                    crate::gateway::print_data(&crate::gateway::dump_data(ResponseId::ListRoomJoinRoom, &response));
-
-                    client
-                        .send_packet(ResponseId::ListRoomJoinRoom, &response)
-                        .await
-                        .expect("Failed to send join room response");
-
-                    client
-                        .send_packet(EventId::RoomOnAllModifiersChanged, &modifier)
-                        .await
-                        .expect("Failed to send modifier report response");
-                }
-                Err(JoinError::RoomNotFound) => {
-                    println!(
-                        "Client {} tried to join non existing room {}",
-                        client.id, request.room_id
-                    );
-                    client
-                        .send_packet(ResponseId::ListRoomJoinRoom, &JoinErrorCode::GenericError)
-                        .await
-                        .expect("Failed to send join room response");
-                }
-                Err(JoinError::IncorrectPassword) => {
-                    println!(
-                        "Client {} tried to join room {} with incorrect password",
-                        client.id, request.room_id
-                    );
-                    client
-                        .send_packet(
-                            ResponseId::ListRoomJoinRoom,
-                            &JoinErrorCode::InvalidPassword,
-                        )
-                        .await
-                        .expect("Failed to send join room response");
-                }
-                Err(JoinError::RoomFull) => {
-                    println!(
-                        "Client {} tried to join full room {}",
-                        client.id, request.room_id
-                    );
-                    client
-                        .send_packet(ResponseId::ListRoomJoinRoom, &JoinErrorCode::RoomFull)
-                        .await
-                        .expect("Failed to send join room response");
-                }
-            }
-        }
-        Err(e) => {
-            println!("Failed to parse join room request: {}", e);
-        }
+        client
+            .send_packet(EventId::RoomOnAllModifiersChanged, &modifier)
+            .await
+            .expect("Failed to send modifier report response");
     }
 }
 
@@ -574,31 +530,22 @@ pub enum LeaveErrorCode {
 }
 
 #[gateway_derive::route(RequestId::ListRoomLeaveRoom)]
-async fn handle_leave_room(client: &mut super::Client, _packet: &mut super::Packet) {
-    if let Some(channel) = client.channel() {
-        let mut channel = channel.lock().await;
+async fn handle_leave_room(client: &mut super::Client, _packet: &()) {
+    let Some((user_id, ch)) = client.channel() else {
+        println!(
+            "Client {} is not in a channel, cannot leave room",
+            client.id
+        );
+        return;
+    };
 
-        if let Some(room) = client.room() {
-            let id = room.lock().await.id;
+    let _ = ch.send::<()>(ChannelCommand::LeaveRoom { user_id })
+        .await;
 
-            let Some(user) = client.user() else {
-                println!("Client {} is not logged in, cannot leave room", client.id);
-                return;
-            };
+    client.room_handle = None;
 
-            if let Err(e) = channel.leave_room(&user, id).await {
-                println!(
-                    "[Error] Failed to leave room {} for client {}: {:?}",
-                    id, client.id, e
-                );
-            }
-        }
-    }
-
-    client.room = None;
-    client.send_packet(ResponseId::ListRoomLeaveRoom, &LeaveErrorCode::Success)
+    client
+        .send_packet(ResponseId::ListRoomLeaveRoom, &LeaveErrorCode::Success)
         .await
         .expect("Failed to send leave room response");
-
-    println!("Client {} left the room", client.id);
 }

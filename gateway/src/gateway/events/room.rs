@@ -1,9 +1,11 @@
 use database::Equipment;
 
-use crate::gateway::{
-    commands::EventId,
-    room::{ModifierReport, Modifiers, MusicId, MusicIdEntry, RoomArena, RoomDifficulty, RoomSpeed, SkillId, TeamId},
-    routes::room::GameStartResult,
+use crate::{
+    room::{
+        ModifierReport, Modifiers, MusicId, MusicIdEntry, RoomArena, RoomDifficulty, RoomSpeed,
+        SkillId, TeamId,
+    },
+    gateway::{commands::EventId, routes::room::GameStartResult},
 };
 
 #[derive(gateway_derive::Event, encoder::StructSerializer)]
@@ -19,12 +21,7 @@ pub struct RoomOnPlayerEnterEventArgs {
 }
 
 #[gateway_derive::event(EventId::RoomOnPlayerEnter)]
-async fn on_player_enter(client: &mut super::Client, data: &dyn super::IEventData) {
-    let Some(data) = super::downcast::<RoomOnPlayerEnterEventArgs>(data) else {
-        println!("Failed to downcast event data for RoomPlayerEnter");
-        return;
-    };
-    
+async fn on_player_enter(client: &mut super::Client, data: &RoomOnPlayerEnterEventArgs) {
     client
         .send_packet(EventId::RoomOnPlayerEnter, data)
         .await
@@ -35,16 +32,11 @@ async fn on_player_enter(client: &mut super::Client, data: &dyn super::IEventDat
 pub struct RoomOnPlayerLeaveEventArgs {
     pub slot: u8,
     pub room_master_slot: u8,
-    pub premium: u16
+    pub premium: u16,
 }
 
 #[gateway_derive::event(EventId::RoomOnPlayerLeave)]
-async fn on_player_leave(client: &mut super::Client, data: &dyn super::IEventData) {
-    let Some(data) = super::downcast::<RoomOnPlayerLeaveEventArgs>(data) else {
-        println!("Failed to downcast event data for RoomPlayerLeave");
-        return;
-    };
-
+async fn on_player_leave(client: &mut super::Client, data: &RoomOnPlayerLeaveEventArgs) {
     client
         .send_packet(EventId::RoomOnPlayerLeave, data)
         .await
@@ -58,12 +50,7 @@ pub struct RoomOnChatEventArgs {
 }
 
 #[gateway_derive::event(EventId::RoomOnChat)]
-async fn on_room_chat(client: &mut super::Client, data: &dyn super::IEventData) {
-    let Some(data) = super::downcast::<RoomOnChatEventArgs>(data) else {
-        println!("Failed to downcast event data for RoomChat");
-        return;
-    };
-
+async fn on_room_chat(client: &mut super::Client, data: &RoomOnChatEventArgs) {
     client
         .send_packet(EventId::RoomOnChat, data)
         .await
@@ -77,12 +64,7 @@ pub struct RoomOnReadyEventArgs {
 }
 
 #[gateway_derive::event(EventId::RoomOnReadyChanged)]
-async fn on_room_player_ready(client: &mut super::Client, data: &dyn super::IEventData) {
-    let Some(data) = super::downcast::<RoomOnReadyEventArgs>(data) else {
-        println!("Failed to downcast event data for RoomPlayerReady");
-        return;
-    };
-
+async fn on_room_player_ready(client: &mut super::Client, data: &RoomOnReadyEventArgs) {
     client
         .send_packet(EventId::RoomOnReadyChanged, data)
         .await
@@ -96,18 +78,13 @@ pub struct RoomOnGameStartEventArgs {
 }
 
 #[gateway_derive::event(EventId::RoomOnGameStart)]
-async fn on_room_game_start(client: &mut super::Client, data: &dyn super::IEventData) {
-    let Some(data) = super::downcast::<RoomOnGameStartEventArgs>(data) else {
-        println!("Failed to downcast event data for RoomGameStart");
-        return;
-    };
-
+async fn on_room_game_start(client: &mut super::Client, data: &RoomOnGameStartEventArgs) {
     client
         .send_packet(EventId::RoomOnGameStart, data)
         .await
         .expect("Failed to send room game start response");
 }
-    
+
 #[derive(gateway_derive::Event, encoder::StructSerializer)]
 pub struct RoomOnMusicIdChangedEventArgs {
     pub id: MusicId,
@@ -116,12 +93,7 @@ pub struct RoomOnMusicIdChangedEventArgs {
 }
 
 #[gateway_derive::event(EventId::RoomOnMusicIdChanged)]
-async fn on_room_change_music_id(client: &mut super::Client, data: &dyn super::IEventData) {
-    let Some(data) = super::downcast::<RoomOnMusicIdChangedEventArgs>(data) else {
-        println!("Failed to downcast event data for RoomChangeMusicId");
-        return;
-    };
-
+async fn on_room_change_music_id(client: &mut super::Client, data: &RoomOnMusicIdChangedEventArgs) {
     client
         .send_packet(EventId::RoomOnMusicIdChanged, data)
         .await
@@ -135,12 +107,7 @@ pub struct RoomOnArenaChangedEventArgs {
 }
 
 #[gateway_derive::event(EventId::RoomOnArenaChanged)]
-async fn on_room_change_arena(client: &mut super::Client, data: &dyn super::IEventData) {
-    let Some(data) = super::downcast::<RoomOnArenaChangedEventArgs>(data) else {
-        println!("Failed to downcast event data for RoomChangeArena");
-        return;
-    };
-
+async fn on_room_change_arena(client: &mut super::Client, data: &RoomOnArenaChangedEventArgs) {
     client
         .send_packet(EventId::RoomOnArenaChanged, &data.arena)
         .await
@@ -153,12 +120,7 @@ pub struct RoomOnSkillChangedEventArgs {
 }
 
 #[gateway_derive::event(EventId::RoomOnSkillChanged)]
-async fn on_room_change_ring(client: &mut super::Client, data: &dyn super::IEventData) {
-    let Some(data) = super::downcast::<RoomOnSkillChangedEventArgs>(data) else {
-        println!("Failed to downcast event data for RoomChangeRing");
-        return;
-    };
-
+async fn on_room_change_ring(client: &mut super::Client, data: &RoomOnSkillChangedEventArgs) {
     client
         .send_packet(EventId::RoomOnSkillChanged, data)
         .await
@@ -172,12 +134,7 @@ pub struct RoomOnTeamChangedEventArgs {
 }
 
 #[gateway_derive::event(EventId::RoomOnTeamChanged)]
-async fn on_room_change_set_team(client: &mut super::Client, data: &dyn super::IEventData) {
-    let Some(data) = super::downcast::<RoomOnTeamChangedEventArgs>(data) else {
-        println!("Failed to downcast event data for RoomChangeSetTeam");
-        return;
-    };
-
+async fn on_room_change_set_team(client: &mut super::Client, data: &RoomOnTeamChangedEventArgs) {
     client
         .send_packet(EventId::RoomOnTeamChanged, data)
         .await
@@ -190,12 +147,7 @@ pub struct RoomOnNameChangedEventArgs {
 }
 
 #[gateway_derive::event(EventId::RoomOnNameChanged)]
-async fn on_room_name_changed(client: &mut super::Client, data: &dyn super::IEventData) {
-    let Some(data) = super::downcast::<RoomOnNameChangedEventArgs>(data) else {
-        println!("Failed to downcast event data for RoomNameChanged");
-        return;
-    };
-
+async fn on_room_name_changed(client: &mut super::Client, data: &RoomOnNameChangedEventArgs) {
     client
         .send_packet(EventId::RoomOnNameChanged, data)
         .await
@@ -209,14 +161,12 @@ pub struct RoomOnModifierChangedEventArgs {
 }
 
 #[gateway_derive::event(EventId::RoomOnModifierChanged)]
-async fn on_room_modifier_changed(client: &mut super::Client, data: &dyn super::IEventData) {
-    let Some(modifier) = super::downcast::<RoomOnModifierChangedEventArgs>(data) else {
-        println!("Failed to downcast event data for RoomModifierChanged");
-        return;
-    };
-
+async fn on_room_modifier_changed(
+    client: &mut super::Client,
+    data: &RoomOnModifierChangedEventArgs,
+) {
     client
-        .send_packet(EventId::RoomOnModifierChanged, modifier)
+        .send_packet(EventId::RoomOnModifierChanged, data)
         .await
         .expect("Failed to send set room modifier response");
 }
@@ -227,14 +177,12 @@ pub struct RoomOnAllModifiersChangedEventArgs {
 }
 
 #[gateway_derive::event(EventId::RoomOnAllModifiersChanged)]
-async fn on_room_all_modifiers_changed(client: &mut super::Client, data: &dyn super::IEventData) {
-    let Some(modifiers) = super::downcast::<RoomOnAllModifiersChangedEventArgs>(data) else {
-        println!("Failed to downcast event data for RoomAllModifiersChanged");
-        return;
-    };
-
+async fn on_room_all_modifiers_changed(
+    client: &mut super::Client,
+    data: &RoomOnAllModifiersChangedEventArgs,
+) {
     client
-        .send_packet(EventId::RoomOnAllModifiersChanged, modifiers)
+        .send_packet(EventId::RoomOnAllModifiersChanged, data)
         .await
         .expect("Failed to send set all room modifiers response");
 }

@@ -1,58 +1,50 @@
-use std::{
-    cmp::Reverse,
-    collections::HashMap,
-    sync::{Arc, Weak},
-};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::{cmp::Reverse, collections::HashMap};
 
-use tokio::sync::Mutex;
+pub use super::arena::RoomArena;
+pub use super::difficulty::RoomDifficulty;
+pub use super::eventtype::GameEventType;
+pub use super::mode::RoomMode;
+pub use super::modifier::{ModifierReport, Modifiers};
+pub use super::music::{MusicId, MusicIdEntry};
+pub use super::skill::SkillId;
+pub use super::speed::RoomSpeed;
+pub use super::status::RoomStatus;
+pub use super::team::TeamId;
 
-use crate::gateway::{
-    commands::EventId::{self},
-    events::{
-        IEventData,
-        game::{
-            ArrayResult, GameOnLoadingReadyEventArgs, GameOnNoteEventEventArgs,
-            GameOnPlayerLeaveEventArgs, PlayerResult, PlayerScore, SCORE_INVALID, SCORE_VALID,
+use crate::channel::ojnlist::Header;
+use crate::channel::{ChannelCommand, ChannelWeakHandle};
+use crate::gateway::events::listroom::ListRoomChangeRoomMaxPlayerEventArgs;
+use crate::gateway::routes::game::ScoreSubmitResponse;
+use crate::gateway::routes::listroom::{JoinErrorCode, JoinRoomResponse, MemberInfo, PositionInfo, PositionStatus};
+use crate::{
+    gateway::{
+        commands::EventId,
+        events::{
+            IEventData,
+            game::{
+                GameFinishEventArgs, GameOnLoadingReadyEventArgs, GameOnNoteEventEventArgs,
+                GameOnPlayerLeaveEventArgs, PlayerResult, PlayerScore, SCORE_INVALID, SCORE_VALID,
+            },
+            listroom::{
+                ListRoomChangeRoomMusicIdEventArgs, ListRoomChangeRoomNameEventArgs,
+                ListRoomChangeRoomSkillEventArgs, ListRoomChangeRoomStatusEventArgs,
+            },
+            room::{
+                RoomOnArenaChangedEventArgs, RoomOnChatEventArgs, RoomOnGameStartEventArgs,
+                RoomOnModifierChangedEventArgs, RoomOnMusicIdChangedEventArgs,
+                RoomOnNameChangedEventArgs, RoomOnPlayerEnterEventArgs, RoomOnPlayerLeaveEventArgs,
+                RoomOnReadyEventArgs, RoomOnSkillChangedEventArgs, RoomOnTeamChangedEventArgs,
+            },
         },
-        listroom::{
-            ListRoomChangeRoomMusicIdEventArgs, ListRoomChangeRoomNameEventArgs,
-            ListRoomChangeRoomSkillEventArgs, ListRoomChangeRoomStatusEventArgs,
+        routes::{
+            game::{GameEventPingRequest, ScoreSubmitRequest},
+            room::GameStartResult,
         },
-        room::{
-            RoomOnArenaChangedEventArgs, RoomOnChatEventArgs, RoomOnGameStartEventArgs,
-            RoomOnModifierChangedEventArgs, RoomOnMusicIdChangedEventArgs,
-            RoomOnNameChangedEventArgs, RoomOnPlayerEnterEventArgs, RoomOnPlayerLeaveEventArgs,
-            RoomOnReadyEventArgs, RoomOnSkillChangedEventArgs, RoomOnTeamChangedEventArgs,
-        },
-    },
-    routes::{
-        game::{GameEventPingRequest, ScoreSubmitRequest},
-        room::GameStartResult,
     },
     user::User,
 };
-
-pub mod arena;
-pub mod difficulty;
-pub mod eventtype;
-pub mod mode;
-pub mod modifier;
-pub mod music;
-pub mod skill;
-pub mod speed;
-pub mod status;
-pub mod team;
-
-pub use arena::RoomArena;
-pub use difficulty::RoomDifficulty;
-pub use eventtype::GameEventType;
-pub use mode::RoomMode;
-pub use modifier::{ModifierReport, Modifiers};
-pub use music::{MusicId, MusicIdEntry};
-pub use skill::SkillId;
-pub use speed::RoomSpeed;
-pub use status::RoomStatus;
-pub use team::TeamId;
 
 #[derive(Debug, Clone, Default)]
 pub struct GameData {
@@ -102,7 +94,8 @@ pub enum ModifierValue {
 
 pub struct Room {
     pub id: u32,
-    pub parent: Weak<Mutex<super::channel::Channel>>,
+    pub counter: Arc<AtomicUsize>,
+    pub channel_handle: ChannelWeakHandle,
 
     pub title: String,
     pub password: Option<String>,
@@ -114,6 +107,7 @@ pub struct Room {
     pub arena_random: bool,
     pub speed: RoomSpeed,
     pub music_id: MusicId,
+    pub header: Option<Header>,
     pub status: RoomStatus,
 
     pub skill_slot: Vec<SkillId>,
@@ -129,8 +123,9 @@ pub struct Room {
 
 impl Room {
     pub fn new(
-        channel: Weak<Mutex<super::channel::Channel>>,
         user: &User,
+        counter: Arc<AtomicUsize>,
+        channel_handle: ChannelWeakHandle,
 
         id: u32,
         title: String,
@@ -141,7 +136,8 @@ impl Room {
     ) -> Self {
         let mut room = Room {
             id,
-            parent: channel,
+            counter,
+            channel_handle,
             title,
             password,
             color: TeamId::Red,
@@ -151,6 +147,7 @@ impl Room {
             arena_random: false,
             speed: RoomSpeed::Speed10,
             music_id: MusicId(0),
+            header: None,
             status: RoomStatus::Waiting,
             skill_slot: Vec::new(),
             skill_seed: gen_random_seed(),
@@ -177,22 +174,24 @@ impl Room {
             join_pos: 0,
         };
 
+        room.counter.store(1, std::sync::atomic::Ordering::SeqCst);
+
         room
     }
 
-    pub fn get_user_slot_index(&self, user: &User) -> Option<usize> {
+    pub fn get_user_slot_index(&self, user: u64) -> Option<usize> {
         self.players.iter().position(
-            |p| matches!(p, UserSlot::User { user: player_user, .. } if player_user.id == user.id),
+            |p| matches!(p, UserSlot::User { user: player_user, .. } if player_user.id == user),
         )
     }
 
-    pub fn get_user_slot(&self, user: &User) -> Option<(usize, &UserSlot)> {
+    pub fn get_user_slot(&self, user: u64) -> Option<(usize, &UserSlot)> {
         self.players.iter().enumerate().find_map(|(i, p)| {
             if let UserSlot::User {
                 user: player_user, ..
             } = p
             {
-                if player_user.id == user.id {
+                if player_user.id == user {
                     return Some((i, p));
                 }
             }
@@ -200,13 +199,13 @@ impl Room {
         })
     }
 
-    pub fn get_user_slot_mut(&mut self, user: &User) -> Option<(usize, &mut UserSlot)> {
+    pub fn get_user_slot_mut(&mut self, user: u64) -> Option<(usize, &mut UserSlot)> {
         self.players.iter_mut().enumerate().find_map(|(i, p)| {
             if let UserSlot::User {
                 user: player_user, ..
             } = p
             {
-                if player_user.id == user.id {
+                if player_user.id == user {
                     return Some((i, p));
                 }
             }
@@ -234,49 +233,139 @@ impl Room {
         current
     }
 
-    pub fn add_player(&mut self, user: &User) -> Option<(u8, TeamId)> {
-        let slot = self
-            .players
-            .iter()
-            .position(|p| matches!(p, UserSlot::Available));
+    pub async fn add_user(&mut self, user: &User, password: Option<String>) -> (JoinRoomResponse, Option<ModifierReport>) {
+        if self.password.is_some() && self.password != password {
+            return (JoinRoomResponse::invalid_password(), None)
+        }
 
-        let Some(slot) = slot else {
-            println!("No available slots in room {}", self.id);
-            return None;
-        };
+        let (slot_idex, team) = {
+            let slot = self
+                .players
+                .iter()
+                .position(|p| matches!(p, UserSlot::Available));
 
-        let color = self.next_color();
-        let join_pos = self.get_next_counter();
+            let Some(slot) = slot else {
+                println!("No available slots in room {}", self.id);
+                return (JoinRoomResponse::room_full(), None);
+            };
 
-        self.players[slot] = UserSlot::User {
-            id: user.id,
-            host: false,
-            ready: false,
-            team: color,
-            data: GameData::default(),
-            user: user.clone(),
-            join_pos,
-        };
+            let color = self.next_color();
+            let join_pos = self.get_next_counter();
 
-        self.broadcast(
-            EventId::RoomOnPlayerEnter,
-            RoomOnPlayerEnterEventArgs {
-                slot: slot as u8,
-                nickname: to_cstring(&user.nickname()),
-                level: user.level(),
-                gender: 1,
+            self.players[slot] = UserSlot::User {
+                id: user.id,
+                host: false,
+                ready: false,
                 team: color,
-                unk1: 0,
-                equipment: user.equipment(),
-                music_list: user.music_list(),
-            },
-            Some(&user),
-        );
+                data: GameData::default(),
+                user: user.clone(),
+                join_pos,
+            };
 
-        Some((slot as u8, color))
+            self.broadcast(
+                EventId::RoomOnPlayerEnter,
+                RoomOnPlayerEnterEventArgs {
+                    slot: slot as u8,
+                    nickname: to_cstring(&user.nickname()),
+                    level: user.level(),
+                    gender: 1,
+                    team: color,
+                    unk1: 0,
+                    equipment: user.equipment(),
+                    music_list: user.music_list(),
+                },
+                Some(&user),
+            );
+
+            self.counter = Arc::new(AtomicUsize::new(self.counter.load(Ordering::SeqCst) + 1));
+
+            (slot, color)
+        };
+
+        let mut slots = [const {
+            PositionInfo {
+                position: 0,
+                status: PositionStatus::Empty,
+                member: None,
+            }
+        }; 7];
+
+        let mut index = 0;
+        let modifier = self.get_modifier_report();
+
+        for (i, user) in self.players.iter().enumerate() {
+            if i == slot_idex as usize {
+                continue;
+            }
+
+            let slot = &mut slots[index];
+            slot.position = i as u8;
+
+            match user {
+                UserSlot::Available => slot.status = PositionStatus::Empty,
+                UserSlot::User {
+                    team,
+                    host,
+                    ready,
+                    user,
+                    ..
+                } => {
+                    slot.status = PositionStatus::Occupied;
+
+                    let nickname = std::ffi::CString::new(user.nickname())
+                        .unwrap_or_else(|_| std::ffi::CString::new("InvalidNickname").unwrap());
+
+                    let member_info = MemberInfo {
+                        nickname,
+                        level: user.level(),
+                        gender: 1,
+                        is_room_master: *host,
+                        color: *team,
+                        ready: *ready,
+                        unk: 0,
+                        equipment: user.equipment(),
+                        list: user.music_list(),
+                    };
+
+                    slot.member = Some(member_info);
+                }
+                UserSlot::Locked => slot.status = PositionStatus::Locked,
+            }
+
+            index += 1;
+        }
+
+        let response = JoinRoomResponse {
+            result: JoinErrorCode::Success,
+            slot: slot_idex as u8,
+            team: team,
+            name: std::ffi::CString::new(self.title.clone()).unwrap_or_default(),
+            music_id: self.music_id,
+            arena: self.arena,
+            mode: self.mode,
+            diffculty: self.difficulty,
+            speed: self.speed,
+            user_count: 7,
+            slots,
+            skills: self.skill_slot.clone(),
+            premium: 0,
+        };
+
+        self.broadcast_channel(
+            EventId::ListRoomOnRoomPlayerCountChanged,
+            ListRoomChangeRoomMaxPlayerEventArgs {
+                id: self.id,
+                max_player: self.max_players() as u8,
+                current_player: self.player_count() as u8,
+                premium: 0,
+            },
+            None,
+        ).await;
+
+        (response, Some(modifier))
     }
 
-    pub async fn remove_client(&mut self, user: &User) -> Option<usize> {
+    pub async fn remove_user(&mut self, user: u64) -> Option<usize> {
         if let Some(slot) = self.get_user_slot_index(user) {
             if self.player_count() > 1 && self.status == RoomStatus::Playing {
                 self.on_game_score_submit(user, ScoreSubmitRequest::default())
@@ -320,17 +409,17 @@ impl Room {
                         room_master_slot: host as u8,
                         premium: 0,
                     },
-                    Some(user),
+                    None
                 );
 
                 println!(
                     "User {} left room {} (slot {}), new host is slot {}",
-                    user.id, self.id, slot, host
+                    user, self.id, slot, host
                 );
             } else {
                 println!(
                     "User {} left room {} (slot {}), room is now empty",
-                    user.id, self.id, slot
+                    user, self.id, slot
                 );
             }
 
@@ -341,7 +430,7 @@ impl Room {
         }
     }
 
-    pub fn is_host(&self, user: &User) -> bool {
+    pub fn is_host(&self, user: u64) -> bool {
         self.get_user_slot(user)
             .map(|(_, slot)| matches!(slot, UserSlot::User { host: true, .. }))
             .unwrap_or(false)
@@ -376,11 +465,10 @@ impl Room {
                 status,
             },
             None,
-        )
-        .await;
+        ).await;
     }
 
-    pub async fn set_ready(&mut self, user: &User) {
+    pub async fn set_ready(&mut self, user: u64) {
         if let Some((slot, UserSlot::User { ready, .. })) = self.get_user_slot_mut(user) {
             let ready_value = !*ready;
             *ready = ready_value;
@@ -410,7 +498,15 @@ impl Room {
             .count()
     }
 
-    pub async fn game_start(&mut self) {
+    pub async fn start_game(&mut self, user_id: u64) -> GameStartResult {
+        if self.is_host(user_id) == false {
+            return GameStartResult::NotHost;
+        }
+
+        if !self.is_all_ready() {
+            return GameStartResult::NotAllReady;
+        }
+
         self.skill_seed = gen_random_seed();
 
         // Elegantly reset game data using standard Default trait
@@ -440,6 +536,8 @@ impl Room {
             None,
         )
         .await;
+
+        GameStartResult::Success
     }
 
     pub async fn set_name(&mut self, name: &str) {
@@ -477,12 +575,28 @@ impl Room {
         title
     }
 
-    pub async fn set_song_id(
+    pub async fn set_music_id(
         &mut self,
         music_id: MusicId,
         difficulty: RoomDifficulty,
         speed: RoomSpeed,
     ) {
+        if self.music_id != music_id {
+            let Ok(header) = self.channel_handle
+                .send::<Option<Header>>(ChannelCommand::RequestOJNInfo { id: music_id })
+                .await else {
+                println!("Failed to fetch OJN info for music ID {}", music_id);
+                return;
+            };
+
+            let Some(header) = header else {
+                println!("OJN info not found for music ID {}", music_id);
+                return;
+            };
+            
+            self.header = Some(header);
+        }
+
         self.music_id = music_id;
         self.difficulty = difficulty;
         self.speed = speed;
@@ -510,18 +624,17 @@ impl Room {
         .await;
     }
 
-    pub fn set_arena(&mut self, arena: RoomArena, random: bool) {
+    pub fn set_arena(&mut self, arena: RoomArena) {
         self.arena = arena;
-        self.arena_random = random;
 
         self.broadcast(
             EventId::RoomOnArenaChanged,
-            RoomOnArenaChangedEventArgs { arena, random },
+            RoomOnArenaChangedEventArgs { arena, random: self.arena_random },
             None,
         );
     }
 
-    pub async fn set_ring(&mut self, ring: Vec<SkillId>) {
+    pub async fn set_skills(&mut self, ring: Vec<SkillId>) {
         self.skill_slot = ring;
 
         self.broadcast(
@@ -543,7 +656,7 @@ impl Room {
         .await;
     }
 
-    pub async fn set_team(&mut self, user: &User, team: TeamId) {
+    pub async fn set_team(&mut self, user: u64, team: TeamId) {
         if let Some((
             slot,
             UserSlot::User {
@@ -564,7 +677,7 @@ impl Room {
         }
     }
 
-    pub async fn on_game_event(&mut self, user: &User, event: GameEventPingRequest) {
+    pub async fn on_game_event(&mut self, user: u64, event: GameEventPingRequest) {
         if let Some((slot, UserSlot::User { data, .. })) = self.get_user_slot_mut(user) {
             match event.r#type {
                 GameEventType::Life => data.health = event.value,
@@ -626,9 +739,9 @@ impl Room {
 
     pub async fn on_game_score_submit(
         &mut self,
-        user: &User,
+        user: u64,
         result: ScoreSubmitRequest,
-    ) -> (bool, usize) {
+    ) -> ScoreSubmitResponse {
         let max_notes = self.fetch_max_notes().await;
 
         let rate = match self.modifiers.get(&Modifiers::Rate) {
@@ -651,19 +764,26 @@ impl Room {
             _ => 0,
         };
 
-        if result.song_rate != rate && result.fln != fln && result.sln != sln && result.nln != nln {
-            println!(
-                "[Warn] User {} submitted score with mismatched modifiers: expected rate {}, fln {}, sln {}, nln {}, but got rate {}, fln {}, sln {}, nln {}",
-                user.id, rate, fln, sln, nln, result.song_rate, result.fln, result.sln, result.nln
-            );
-            return (false, 0);
-        }
 
         // Early return: Invert the check to avoid deep nesting
         let slot = match self.get_user_slot_mut(user) {
             Some((slot, UserSlot::User { data, .. })) => {
+                if result.song_rate != rate && result.fln != fln && result.sln != sln && result.nln != nln {
+                    println!(
+                        "[Warn] User {} submitted score with mismatched modifiers: expected rate {}, fln {}, sln {}, nln {}, but got rate {}, fln {}, sln {}, nln {}",
+                        user, rate, fln, sln, nln, result.song_rate, result.fln, result.sln, result.nln
+                    );
+                    return ScoreSubmitResponse {
+                        slot: slot as u8,
+                        success: false,
+                    };
+                }
+
                 if data.finished {
-                    return (true, slot);
+                    return ScoreSubmitResponse {
+                        slot: slot as u8,
+                        success: false,
+                    };
                 }
 
                 let user_total_notes = result.cool as i32
@@ -671,7 +791,10 @@ impl Room {
                     + result.bad as i32
                     + result.miss as i32;
                 if user_total_notes > max_notes {
-                    return (false, slot); // Reject: likely score exploit
+                    return ScoreSubmitResponse {
+                        slot: slot as u8,
+                        success: false,
+                    };
                 }
 
                 // Update user state
@@ -687,8 +810,11 @@ impl Room {
                 slot
             }
             _ => {
-                println!("[Warn] User {} is not in room {}", user.id, self.id);
-                return (false, 0);
+                println!("[Warn] User {} is not in room {}", user, self.id);
+                return ScoreSubmitResponse {
+                    slot: u8::MAX, // Invalid slot to indicate error
+                    success: false,
+                };
             }
         };
 
@@ -697,27 +823,18 @@ impl Room {
             self.process_match_results(max_notes).await;
         }
 
-        (true, slot)
+        ScoreSubmitResponse {
+            slot: slot as u8,
+            success: true,
+        }
     }
 
     async fn fetch_max_notes(&self) -> i32 {
-        let channel_arc = match self.parent.upgrade() {
-            Some(c) => c,
-            None => return 0,
-        };
-
-        let channel = channel_arc.lock().await;
-
-        channel
-            .list
-            .iter()
-            .find(|ojn| ojn.songid == self.music_id.0 as i32)
-            .map(|ojn| match self.difficulty {
-                RoomDifficulty::Easy => ojn.note_count[0],
-                RoomDifficulty::Normal => ojn.note_count[1],
-                RoomDifficulty::Hard => ojn.note_count[2],
-            })
-            .unwrap_or(0)
+        self.header.as_ref().map(|h| match self.difficulty {
+            RoomDifficulty::Easy => h.note_count[0],
+            RoomDifficulty::Normal => h.note_count[1],
+            RoomDifficulty::Hard => h.note_count[2],
+        }).unwrap_or(0)
     }
 
     async fn process_match_results(&mut self, max_notes: i32) {
@@ -862,11 +979,11 @@ impl Room {
         }
 
         // Broadcast & Reset
-        self.broadcast(EventId::GameOnFinish, ArrayResult { results }, None);
+        self.broadcast(EventId::GameOnFinish, GameFinishEventArgs { results }, None);
         self.set_status(RoomStatus::Waiting).await;
     }
 
-    pub fn confirm_game_loaded(&mut self, user: &User) {
+    pub fn confirm_game_loaded(&mut self, user: u64) {
         if let Some((slot, UserSlot::User { data, .. })) = self.get_user_slot_mut(user) {
             data.loaded = true;
 
@@ -974,17 +1091,19 @@ impl Room {
         );
     }
 
-    pub async fn leave_game(&mut self, user: &User) {
-        let Some(slot_idx) = self.get_user_slot_index(user) else {
+    pub async fn leave_game(&mut self, user: u64) -> bool {
+        let (slot, level) = if let Some((slot, UserSlot::User { user, .. })) = self.get_user_slot_mut(user) {
+            (slot, user.level())
+        } else {
             println!("User is not in room {}", self.id);
-            return;
+            return false;
         };
 
         self.broadcast(
             EventId::GameOnPlayerLeave,
             GameOnPlayerLeaveEventArgs {
-                slot: slot_idx as u8,
-                level: user.level(),
+                slot: slot as u8,
+                level,
             },
             None,
         );
@@ -1000,25 +1119,33 @@ impl Room {
                     .expect("Failed to save user data after leaving game");
             }
 
-            self.remove_client(user).await;
+            self.remove_user(user).await;
+
+            // Removed from the room.
+            return true;
         } else {
             self.set_status(RoomStatus::Waiting).await;
+
+            return false;
         }
     }
 
-    pub async fn on_chat(&mut self, user: &User, message: &str) {
-        if let Some((_, UserSlot::User { .. })) = self.get_user_slot_mut(user) {
-            self.broadcast(
-                EventId::RoomOnChat,
-                RoomOnChatEventArgs {
-                    author: to_cstring(&user.nickname()),
-                    message: to_cstring(message),
-                },
-                None,
-            );
+    pub async fn on_chat(&mut self, user: u64, message: &str) {
+        let nickname = if let Some((_, UserSlot::User { user, .. })) = self.get_user_slot_mut(user) {
+            to_cstring(&user.nickname())
         } else {
             println!("User is not in room {}", self.id);
-        }
+            return;
+        };
+
+        self.broadcast(
+            EventId::RoomOnChat,
+            RoomOnChatEventArgs {
+                author: nickname,
+                message: to_cstring(message),
+            },
+            None,
+        );
     }
 
     pub fn broadcast<T: IEventData + 'static>(
@@ -1051,11 +1178,14 @@ impl Room {
         event: T,
         exception: Option<&User>,
     ) {
-        if let Some(channel) = self.parent.upgrade() {
-            let mut channel = channel.lock().await;
-
-            channel.broadcast(id, event, exception);
-        }
+        self.channel_handle
+            .send::<()>(ChannelCommand::BroadcastEvent {
+                id,
+                event: Arc::new(event) as Arc<dyn IEventData>,
+                exception: exception.map(|u| u.id),
+            })
+            .await
+            .expect("Failed to broadcast event to channel");
     }
 }
 

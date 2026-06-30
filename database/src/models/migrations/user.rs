@@ -58,9 +58,19 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(User::Name).string().not_null())
                     .col(ColumnDef::new(User::PasswordHash).string().not_null())
                     .col(ColumnDef::new(User::Nickname).string().not_null())
-                    .col(ColumnDef::new(User::Exp).big_unsigned().not_null().default(0))
+                    .col(
+                        ColumnDef::new(User::Exp)
+                            .big_unsigned()
+                            .not_null()
+                            .default(0),
+                    )
                     .col(ColumnDef::new(User::Wins).unsigned().not_null().default(0))
-                    .col(ColumnDef::new(User::Losses).unsigned().not_null().default(0))
+                    .col(
+                        ColumnDef::new(User::Losses)
+                            .unsigned()
+                            .not_null()
+                            .default(0),
+                    )
                     .col(ColumnDef::new(User::Draws).unsigned().not_null().default(0))
                     .col(ColumnDef::new(User::Mcash).unsigned().not_null().default(0))
                     .col(ColumnDef::new(User::Point).unsigned().not_null().default(0))

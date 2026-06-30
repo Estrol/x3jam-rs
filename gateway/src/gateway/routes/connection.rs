@@ -6,7 +6,7 @@ use crate::gateway::{
 };
 
 #[gateway_derive::route(RequestId::Disconnect)]
-async fn handle_disconnect(client: &mut super::Client, _packet: &mut super::Packet) {
+async fn handle_disconnect(client: &mut super::Client, _packet: &()) {
     let Some(sender) = client.sender.as_ref() else {
         panic!("Attempted to send disconnect event for client without sender");
     };
@@ -17,7 +17,7 @@ async fn handle_disconnect(client: &mut super::Client, _packet: &mut super::Pack
 }
 
 #[gateway_derive::route(RequestId::GatewayPing)]
-async fn handle_ping(client: &mut super::Client, _packet: &mut super::Packet) {
+async fn handle_ping(client: &mut super::Client, _packet: &()) {
     client
         .send_packet(ResponseId::GatewayPing, &())
         .await

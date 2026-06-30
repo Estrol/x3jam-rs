@@ -26,8 +26,18 @@ pub enum Score {
     MaxCombo,
     #[iden = "jam_combo"]
     JamCombo,
+    #[iden = "timing"]
+    Timing,
     #[iden = "rate"]
     Rate,
+    #[iden = "fln"]
+    Fln,
+    #[iden = "sln"]
+    Sln,
+    #[iden = "nln"]
+    Nln,
+    #[iden = "arragement"]
+    Arragement,
     #[iden = "skills"]
     Skills,
     #[iden = "timestamp"]
@@ -57,8 +67,18 @@ impl MigrationTrait for Migration {
                             .auto_increment()
                             .primary_key(),
                     )
-                    .col(ColumnDef::new(Score::UserId).big_unsigned().not_null().unique_key())
-                    .col(ColumnDef::new(Score::MusicId).unsigned().not_null().unique_key())
+                    .col(
+                        ColumnDef::new(Score::UserId)
+                            .big_unsigned()
+                            .not_null()
+                            .unique_key(),
+                    )
+                    .col(
+                        ColumnDef::new(Score::MusicId)
+                            .unsigned()
+                            .not_null()
+                            .unique_key(),
+                    )
                     .col(ColumnDef::new(Score::Score).unsigned().not_null())
                     .col(ColumnDef::new(Score::Cool).unsigned().not_null())
                     .col(ColumnDef::new(Score::Good).unsigned().not_null())
@@ -66,7 +86,12 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(Score::Miss).unsigned().not_null())
                     .col(ColumnDef::new(Score::MaxCombo).unsigned().not_null())
                     .col(ColumnDef::new(Score::JamCombo).unsigned().not_null())
+                    .col(ColumnDef::new(Score::Timing).unsigned().not_null())
                     .col(ColumnDef::new(Score::Rate).float().not_null())
+                    .col(ColumnDef::new(Score::Fln).unsigned().not_null())
+                    .col(ColumnDef::new(Score::Sln).unsigned().not_null())
+                    .col(ColumnDef::new(Score::Nln).unsigned().not_null())
+                    .col(ColumnDef::new(Score::Arragement).string().not_null())
                     .col(ColumnDef::new(Score::Skills).string().not_null())
                     .col(ColumnDef::new(Score::Timestamp).date_time().not_null())
                     .to_owned(),

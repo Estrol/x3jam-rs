@@ -1,30 +1,36 @@
 pub async fn handle() -> impl axum::response::IntoResponse {
-    let channels = crate::gateway::GET_CHANNELS().await;
+    // let channels = vec![];
 
-    let mut result_channels = Vec::new();
-    for channel in channels.iter() {
-        let lock = channel.0.lock().await;
+    // let mut result_channels = Vec::new();
+    // for channel in channels.iter() {
+    //     let lock = channel.0.lock().await;
 
-        let mut channel = ChannelInfo {
-            region: channel.1,
-            channel: channel.2,
-            users: vec![],
-        };
+    //     let mut channel = ChannelInfo {
+    //         region: channel.1,
+    //         channel: channel.2,
+    //         users: vec![],
+    //     };
 
-        for client in lock.users.iter() {
-            let user = UserInfo {
-                id: client.user.id,
-                level: client.user.level(),
-                nickname: client.user.nickname().to_string(),
-            };
+    //     for client in lock.users.iter() {
+    //         let user = UserInfo {
+    //             id: client.user.id,
+    //             level: client.user.level(),
+    //             nickname: client.user.nickname().to_string(),
+    //         };
 
-            channel.users.push(user);
-        }
+    //         channel.users.push(user);
+    //     }
 
-        result_channels.push(channel);
-    }
+    //     result_channels.push(channel);
+    // }
 
-    axum::Json(result_channels)
+    // axum::Json(result_channels)
+
+    axum::Json(vec![ChannelInfo {
+        region: 0,
+        channel: 0,
+        users: vec![],
+    }])
 }
 
 #[derive(serde::Serialize)]

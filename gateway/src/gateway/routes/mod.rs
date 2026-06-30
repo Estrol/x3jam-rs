@@ -1,10 +1,10 @@
 pub mod connection;
-pub mod game;
 pub mod gateway;
 pub mod listroom;
 pub mod planet;
 pub mod room;
-pub mod shop;
+pub mod game;
+// pub mod shop;
 
 use std::io::{Cursor, Read};
 
@@ -29,42 +29,60 @@ pub struct Packet {
     pub body: Vec<u8>,
 }
 
-async fn make_packets(client: &mut Client) -> std::io::Result<Vec<Packet>> {
-    let mut packets = Vec::new();
+fn make_packets(client: &mut Client) -> Option<Vec<Packet>> {
+    let current_index = client.xor.get_position();
+    let mut retry_count = 0;
+
     let data = client.data().to_vec();
+
+    loop {
+        match try_make_packets(client, &data) {
+            Some(packets) => return Some(packets),
+            None => {
+                if retry_count >= 3 {
+                    return None;
+                }
+
+                let mut index = current_index;
+                index += 1;
+                if index >= client.xor.size() {
+                    index = 0;
+                    retry_count += 1;
+                }
+
+                client.xor.set_position(index);
+            }
+        }
+    }
+}
+
+fn try_make_packets(client: &mut Client, data: &[u8]) -> Option<Vec<Packet>> {
+    let mut packets = Vec::new();
     let mut cursor = Cursor::new(&data);
 
     while cursor.position() < data.len() as u64 {
-        let length = cursor.read_u16::<LittleEndian>()?;
+        let length = cursor.read_u16::<LittleEndian>().ok()?;
         if length > data.len() as u16 {
-            break; // Invalid length, stop processing
+            return None;
         }
 
-        cursor.set_position(cursor.position() - 2);
-
-        let mut packet_data = vec![0u8; length as usize];
-        cursor.read_exact(&mut packet_data)?;
-
-        let mut xored_data = packet_data[2..].to_vec();
+        let mut xored_data = vec![0u8; (length - 2) as usize];
+        cursor.read_exact(&mut xored_data).ok()?;
         client.xor.process(&mut xored_data);
 
         let mut xored_cursor = Cursor::new(&xored_data);
         let mut password = [0u8; 16];
         let mut ex_end_block = [0u8; 8];
 
-        xored_cursor.read_exact(&mut password)?;
-        xored_cursor.read_exact(&mut ex_end_block)?;
+        xored_cursor.read_exact(&mut password).ok()?;
+        xored_cursor.read_exact(&mut ex_end_block).ok()?;
 
-        let body_size = xored_cursor.read_u32::<LittleEndian>()? as usize;
-        let ex_body_with_size_pad = xored_cursor.read_u32::<LittleEndian>()? as usize;
+        let body_size = xored_cursor.read_u32::<LittleEndian>().ok()? as usize;
+        let ex_body_with_size_pad = xored_cursor.read_u32::<LittleEndian>().ok()? as usize;
 
         let body_size_with_pad = xored_data.len() - xored_cursor.position() as usize;
         if body_size_with_pad != ex_body_with_size_pad || body_size > body_size_with_pad {
-            println!(
-                "[Error] Body size mismatch: body_size={}, body_size_with_pad={}, ex_body_with_size_pad={}",
-                body_size, body_size_with_pad, ex_body_with_size_pad
-            );
-            break; // Invalid body size, stop processing
+            return None;
         }
 
         let end_diff = 32 + body_size_with_pad - ex_end_block.len();
@@ -72,26 +90,21 @@ async fn make_packets(client: &mut Client) -> std::io::Result<Vec<Packet>> {
         let end_block = xored_data[end_diff..end_diff + ex_end_block.len()].to_vec();
 
         if ex_end_block != *end_block {
-            println!(
-                "[Error] End block mismatch: expected={:02X?}, actual={:02X?}",
-                ex_end_block, end_block
-            );
-            break; // End block mismatch, stop processing
+            return None;
         }
 
         let payload_size = body_size - 2;
         let Some(des_key) = cbc_decrypt::Md5AndDes::derive_key(&password, Some(16)) else {
-            println!("[Error] Failed to derive DES key from password");
-            break; // Invalid password length, stop processing
+            return None;
         };
 
         let mut encypted_data = vec![0u8; body_size_with_pad];
-        xored_cursor.read_exact(&mut encypted_data)?;
+        xored_cursor.read_exact(&mut encypted_data).ok()?;
 
         let decrypted_data =
             match cbc_decrypt::Md5AndDes::decrypt_with_key(&encypted_data, &des_key) {
                 Ok(data) => data,
-                Err(_) => break, // Decryption failed, stop processing
+                Err(_) => return None, // Decryption failed, stop processing
             };
 
         let mut data_cursor = Cursor::new(&decrypted_data);
@@ -99,7 +112,7 @@ async fn make_packets(client: &mut Client) -> std::io::Result<Vec<Packet>> {
         let mut data = vec![0u8; payload_size];
 
         if payload_size > 0 {
-            data_cursor.read_exact(&mut data)?;
+            data_cursor.read_exact(&mut data).ok()?;
         }
 
         packets.push(Packet {
@@ -108,12 +121,12 @@ async fn make_packets(client: &mut Client) -> std::io::Result<Vec<Packet>> {
         });
     }
 
-    Ok(packets)
+    Some(packets)
 }
 
 pub async fn handle_request(client: &mut super::Client) {
-    match make_packets(client).await {
-        Ok(mut packets) => {
+    match make_packets(client) {
+        Some(mut packets) => {
             if packets.len() > 0 && client.begin().is_ok() {
                 for packet in packets.iter_mut() {
                     println!(
@@ -130,7 +143,13 @@ pub async fn handle_request(client: &mut super::Client) {
                 client.end().await.expect("Failed to end packet batch");
             }
         }
-        Err(e) => eprintln!("Failed to process packets: {}", e),
+
+        None => {
+            println!(
+                "Failed to process packets for client={:?}, possibly due to decryption failure",
+                client.id
+            );
+        }
     }
 }
 

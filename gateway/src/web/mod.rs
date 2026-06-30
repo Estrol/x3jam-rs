@@ -1,6 +1,8 @@
 pub mod routes;
 
-pub async fn run(token: tokio_util::sync::CancellationToken) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+pub async fn run(
+    token: tokio_util::sync::CancellationToken,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("Starting web server on port 16000...");
 
     let router = routes::register_routes().await;
