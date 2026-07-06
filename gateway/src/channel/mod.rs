@@ -7,9 +7,9 @@ use futures::FutureExt as _;
 use tokio::sync::{mpsc::UnboundedSender, oneshot};
 
 use crate::{
-    gateway::{commands::EventId, events::IEventData}, room::{
-        MusicId, MusicIdEntry, RoomMode,
-    }, user::User,
+    gateway::{commands::EventId, events::IEventData, routes::myroom::InventoryEquipResponse},
+    room::{MusicId, RoomMode},
+    user::{ItemId, User},
 };
 
 pub mod channel;
@@ -99,7 +99,8 @@ impl ChannelHandle {
                 .await
                 .map_err(|_| "Failed to receive response from channel")?;
 
-            if TypeId::of::<()>() == response.type_id() && TypeId::of::<DST>() != TypeId::of::<()>() {
+            if TypeId::of::<()>() == response.type_id() && TypeId::of::<DST>() != TypeId::of::<()>()
+            {
                 return Err("Function expect some data but operation return no data".into());
             }
 
@@ -110,9 +111,7 @@ impl ChannelHandle {
         }
     }
 
-    pub fn make_weak(
-        &self,
-    ) -> ChannelWeakHandle {
+    pub fn make_weak(&self) -> ChannelWeakHandle {
         ChannelWeakHandle {
             region: self.region,
             id: self.id,
@@ -169,7 +168,8 @@ impl ChannelWeakHandle {
                 .await
                 .map_err(|_| "Failed to receive response from channel")?;
 
-            if TypeId::of::<()>() == response.type_id() && TypeId::of::<DST>() != TypeId::of::<()>() {
+            if TypeId::of::<()>() == response.type_id() && TypeId::of::<DST>() != TypeId::of::<()>()
+            {
                 return Err("Function expect some data but operation return no data".into());
             }
 
@@ -182,11 +182,11 @@ impl ChannelWeakHandle {
 }
 
 pub async fn process_command(
-    channel: &mut channel::Channel, 
-    mut request: ChannelRequest, 
+    channel: &mut channel::Channel,
+    mut request: ChannelRequest,
     _token: &tokio_util::sync::CancellationToken,
     _sender: &UnboundedSender<ChannelRequest>,
-    weak: &mut Option<ChannelWeakHandle>
+    weak: &mut Option<ChannelWeakHandle>,
 ) {
     let Some(data) = request.data.take() else {
         println!("Received ChannelRequest with no data");
@@ -194,11 +194,19 @@ pub async fn process_command(
     };
 
     match data {
+        ChannelCommand::Heartbeat => {
+            channel.heartbeat().await;
+        }
+
         ChannelCommand::SetWeakHandle { handle } => {
             *weak = Some(handle);
         }
 
-        ChannelCommand::BroadcastEvent { id, event, exception } => {
+        ChannelCommand::BroadcastEvent {
+            id,
+            event,
+            exception,
+        } => {
             channel.users.broadcast_event(id, event, exception);
         }
 
@@ -215,9 +223,40 @@ pub async fn process_command(
             user_id,
             client_ids,
         } => {
+            let mut counter = 0;
+
+            for id in &client_ids {
+                let result = channel
+                    .lists
+                    .iter()
+                    .find(|ojn| ojn.songid == id.songid() as i32);
+
+                if !result.is_none() {
+                    counter += 1;
+                }
+
+                #[cfg(debug_assertions)]
+                {
+                    if result.is_none() {
+                        println!(
+                            "User {} sent client list with unknown songid: {}",
+                            user_id,
+                            id.songid()
+                        );
+                    }
+                }
+            }
+
             let (user, _) = channel
                 .get_user_mut(user_id)
                 .expect("User not found for SetClientList");
+
+            println!(
+                "User {} set client list with {} valid entries out of {}",
+                user_id,
+                counter,
+                client_ids.len()
+            );
 
             user.set_music_list(client_ids);
         }
@@ -251,7 +290,15 @@ pub async fn process_command(
             };
 
             let handle = channel
-                .create_room(channel_handle, user_id, name, password, mode, min_level, max_level)
+                .create_room(
+                    channel_handle,
+                    user_id,
+                    name,
+                    password,
+                    mode,
+                    min_level,
+                    max_level,
+                )
                 .await;
 
             request.send(handle);
@@ -269,18 +316,73 @@ pub async fn process_command(
             let response = channel.leave_room(user_id).await;
 
             request.send(response);
-        },
+        }
+        ChannelCommand::Kicked { user_id } => {
+            let Some(user) = channel.users.get_mut(user_id) else {
+                println!("User {} not found for Kicked", user_id);
+                return;
+            };
+
+            user.room_id = channel::INVALID_ROOM_ID;
+        }
         ChannelCommand::Chat { user_id, message } => {
             channel.chat(user_id, message);
         }
         ChannelCommand::RequestOJNInfo { id } => {
-            let result = channel.lists
+            let result = channel
+                .lists
                 .iter()
-                .find(|ojn| ojn.songid == id.0 as i32)
+                .find(|ojn| ojn.songid == id.songid() as i32)
                 .map(|ojn| ojn.clone());
 
             request.send(result);
-        },
+        }
+        ChannelCommand::EquipItem {
+            user_id,
+            character_slot,
+            item_slot,
+        } => {
+            let Some((user, _)) = channel.get_user_mut(user_id) else {
+                println!("User {} not found for EquipItem", user_id);
+                return;
+            };
+
+            let item = match user.get_item_from_slot(item_slot) {
+                Some(item) => item,
+                None => {
+                    return request.send(InventoryEquipResponse {
+                        result: 1,
+                        ..Default::default()
+                    });
+                }
+            };
+
+            let old = match user.set_equipment(character_slot, item.id) {
+                Some(old) => old,
+                None => {
+                    return request.send(InventoryEquipResponse {
+                        result: 1,
+                        ..Default::default()
+                    });
+                }
+            };
+
+            // Equipment always has amount of one.
+            user.set_item_in_slot(item_slot, ItemId::new(old));
+
+            let _ = user.save().await;
+
+            request.send((
+                InventoryEquipResponse {
+                    result: 0,
+                    character_slot,
+                    new_equip_item_id: item.id,
+                    inventory_item_id: item_slot,
+                    old_equip_item_id: old,
+                },
+                user.clone(),
+            ));
+        }
     }
 }
 
@@ -289,10 +391,10 @@ pub async fn make_channel(
     region: u32,
     id: u32,
     max_users: usize,
-    path: &str,
+    path: String,
 ) -> Result<ChannelHandle, Box<dyn std::error::Error + Send + Sync>> {
     let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel::<ChannelRequest>();
-    let (mut channel, counter) = channel::Channel::new(region, id, path).await;
+    let (mut channel, counter) = channel::Channel::new(region, id, &path).await;
 
     let sender_for_room = sender.clone();
 
@@ -303,8 +405,8 @@ pub async fn make_channel(
             tokio::select! {
                 Some(request) = receiver.recv() => {
                     let unwind_safe = std::panic::AssertUnwindSafe(process_command(
-                        &mut channel, 
-                        request, 
+                        &mut channel,
+                        request,
                         &cancelation_token,
                         &sender_for_room,
                         &mut weak_handle
@@ -331,7 +433,10 @@ pub async fn make_channel(
         counter,
     };
 
-    let _ = handle.send::<()>(ChannelCommand::SetWeakHandle { handle: handle.make_weak() })
+    let _ = handle
+        .send::<()>(ChannelCommand::SetWeakHandle {
+            handle: handle.make_weak(),
+        })
         .await
         .map_err(|e| format!("Failed to set weak handle for channel: {}", e))?;
 
@@ -339,6 +444,8 @@ pub async fn make_channel(
 }
 
 pub enum ChannelCommand {
+    Heartbeat,
+
     SetWeakHandle {
         handle: ChannelWeakHandle,
     },
@@ -366,7 +473,7 @@ pub enum ChannelCommand {
     RequestServerList,
     SetClientList {
         user_id: u64,
-        client_ids: Vec<MusicIdEntry>,
+        client_ids: Vec<MusicId>,
     },
     GetRooms,
     GetUsers,
@@ -386,10 +493,20 @@ pub enum ChannelCommand {
     LeaveRoom {
         user_id: u64,
     },
+    Kicked {
+        user_id: u64,
+    },
 
     // Chat
     Chat {
         user_id: u64,
         message: String,
+    },
+
+    // MyRoom
+    EquipItem {
+        user_id: u64,
+        character_slot: u32,
+        item_slot: u32,
     },
 }

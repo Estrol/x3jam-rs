@@ -1,6 +1,6 @@
 use crate::{
-    room::{MusicId, RoomDifficulty, RoomMode, RoomSpeed, RoomStatus, SkillId},
     gateway::commands::EventId,
+    room::{MusicId, RoomDifficulty, RoomMode, RoomSpeed, RoomStatus, SkillId},
 };
 
 #[derive(gateway_derive::Event, encoder::StructSerializer)]

@@ -1,8 +1,17 @@
 use crate::{
-    channel::ChannelCommand, gateway::commands::ResponseId, room::{
-        ModifierReport, Modifiers, MusicId, RoomArena, RoomCommand, RoomDifficulty, RoomMode, RoomSpeed, RoomWeakHandle, SkillId, TeamId,
+    channel::ChannelCommand,
+    gateway::{
+        commands::ResponseId,
+        events::room::PlayingState,
+    },
+    room::{
+        ModifierReport, Modifiers, MusicId, RoomArena, RoomCommand, RoomDifficulty, RoomMode,
+        RoomSpeed, RoomWeakHandle, SkillId, TeamId,
     },
 };
+
+#[cfg(not(feature = "disable-o2hook2-mod"))]
+use crate::gateway::commands::EventId;
 
 #[derive(Debug, Copy, Clone, encoder::StructSerializer)]
 pub enum CreateRoomResult {
@@ -43,27 +52,49 @@ async fn handle_create_room(client: &mut super::Client, request: &CreateRoomRequ
     let max_level = request.max_level;
 
     let Ok((result, data)) = channel
-        .send::<(CreateRoomResult, Option<RoomWeakHandle>)>(ChannelCommand::CreateRoom {
-            user_id,
-            name: title,
-            password,
-            mode,
-            min_level,
-            max_level,
-        })
+        .send::<(CreateRoomResult, Option<(RoomWeakHandle, ModifierReport)>)>(
+            ChannelCommand::CreateRoom {
+                user_id,
+                name: title,
+                password,
+                mode,
+                min_level,
+                max_level,
+            },
+        )
         .await
     else {
         println!("Failed to send create room command to channel");
         return;
     };
 
-    let response = CreateRoomResponse {
-        result,
-        room_id: data.as_ref().map(|handle| handle.id).unwrap_or(0),
-        premium: false,
+    let Some((room_handle, modifier_report)) = data else {
+        client
+            .send_packet(ResponseId::ListRoomCreateRoom, &result)
+            .await
+            .expect("Failed to send create room response");
+
+        return;
     };
 
-    client.room_handle = data;
+    let id = room_handle.id;
+
+    client.room_handle = Some(room_handle);
+
+    #[cfg(not(feature = "disable-o2hook2-mod"))]
+    client
+        .send_packet(EventId::RoomOnAllModifiersChanged, &modifier_report)
+        .await
+        .expect("Failed to send set all room modifiers response");
+
+    #[cfg(feature = "disable-o2hook2-mod")]
+    let _ = modifier_report; // To prevent unused variable warning when the feature is disabled
+
+    let response = CreateRoomResponse {
+        result,
+        room_id: id,
+        premium: false
+    };
 
     client
         .send_packet(ResponseId::ListRoomCreateRoom, &response)
@@ -80,13 +111,14 @@ pub struct SetRoomMusic {
 
 #[gateway_derive::route(RequestId::RoomSetMusicId)]
 async fn handle_set_room_music(client: &mut super::Client, packet: &SetRoomMusic) {
-    let Some((_, channel)) = client.room() else {
+    let Some((user_id, channel)) = client.room() else {
         println!("Client is not in a channel");
         return;
     };
 
     channel
         .send::<()>(RoomCommand::SetMusicId {
+            user_id,
             music_id: packet.id,
             difficulty: packet.difficulty,
             speed: packet.speed,
@@ -97,13 +129,14 @@ async fn handle_set_room_music(client: &mut super::Client, packet: &SetRoomMusic
 
 #[gateway_derive::route(RequestId::RoomSetArena)]
 async fn handle_set_room_arena(client: &mut super::Client, packet: &RoomArena) {
-    let Some((_, channel)) = client.room() else {
+    let Some((user_id, channel)) = client.room() else {
         println!("Client is not in a channel");
         return;
     };
 
     channel
         .send::<()>(RoomCommand::SetArena {
+            user_id,
             arena: *packet,
         })
         .await
@@ -128,13 +161,14 @@ async fn handle_set_room_team(client: &mut super::Client, packet: &TeamId) {
 
 #[gateway_derive::route(RequestId::RoomSetSkill)]
 async fn handle_set_room_ring(client: &mut super::Client, packet: &Vec<SkillId>) {
-    let Some((_, channel)) = client.room() else {
+    let Some((user_id, channel)) = client.room() else {
         println!("Client is not in a channel");
         return;
     };
 
     channel
         .send::<()>(RoomCommand::SetSkills {
+            user_id,
             skills: packet.clone(),
         })
         .await
@@ -157,9 +191,7 @@ async fn handle_start_game(client: &mut super::Client, _packet: &()) {
     };
 
     let result = channel
-        .send::<GameStartResult>(RoomCommand::StartGame {
-            user_id,
-        })
+        .send::<GameStartResult>(RoomCommand::StartGame { user_id })
         .await
         .expect("Failed to send start game command to channel");
 
@@ -173,7 +205,7 @@ async fn handle_start_game(client: &mut super::Client, _packet: &()) {
 
 #[gateway_derive::route(RequestId::RoomNameChange)]
 async fn handle_change_title(client: &mut super::Client, packet: &std::ffi::CString) {
-    let Some((_, channel)) = client.room() else {
+    let Some((user_id, channel)) = client.room() else {
         println!("Client is not in a channel");
         return;
     };
@@ -182,6 +214,7 @@ async fn handle_change_title(client: &mut super::Client, packet: &std::ffi::CStr
 
     channel
         .send::<()>(RoomCommand::SetName {
+            user_id,
             name: title,
         })
         .await
@@ -217,20 +250,23 @@ async fn handle_room_chat(client: &mut super::Client, packet: &std::ffi::CString
 }
 
 #[derive(encoder::StructDeserializer)]
+#[allow(dead_code)]
 struct SetModifierRequest {
     modifier: Modifiers,
     value: u32,
 }
 
+#[cfg(not(feature = "disable-o2hook2-mod"))]
 #[gateway_derive::route(RequestId::RoomSetModifier)]
 async fn handle_set_modifier(client: &mut super::Client, packet: &SetModifierRequest) {
-    let Some((_, channel)) = client.room() else {
+    let Some((user_id, channel)) = client.room() else {
         println!("Client is not in a channel");
         return;
     };
 
     channel
         .send::<()>(RoomCommand::SetModifier {
+            user_id,
             modifier: packet.modifier,
             value: packet.value,
         })
@@ -238,17 +274,49 @@ async fn handle_set_modifier(client: &mut super::Client, packet: &SetModifierReq
         .expect("Failed to send set modifier command to channel");
 }
 
+#[cfg(not(feature = "disable-o2hook2-mod"))]
 #[gateway_derive::route(RequestId::RoomSetAllModifiers)]
 async fn handle_set_all_modifiers(client: &mut super::Client, packet: &ModifierReport) {
-    let Some((_, channel)) = client.room() else {
+    let Some((user_id, channel)) = client.room() else {
         println!("Client is not in a channel");
         return;
     };
 
     channel
         .send::<()>(RoomCommand::SetAllModifiers {
+            user_id,
             modifiers: packet.clone(),
         })
         .await
         .expect("Failed to send set all modifiers command to channel");
+}
+
+#[gateway_derive::route(RequestId::RoomSlotToggle)]
+async fn handle_toggle_slot(client: &mut super::Client, packet: &u8) {
+    let Some((user_id, room)) = client.room() else {
+        println!("Client is not in a channel");
+        return;
+    };
+
+    let _ = room
+        .send::<()>(RoomCommand::ToggleSlot {
+            user_id,
+            slot: *packet as usize,
+        })
+        .await;
+}
+
+#[gateway_derive::route(RequestId::RoomSetMusicState)]
+async fn handle_set_music_state(client: &mut super::Client, packet: &PlayingState) {
+    let Some((user_id, room)) = client.room() else {
+        println!("Client is not in a channel");
+        return;
+    };
+
+    let _ = room
+        .send::<()>(RoomCommand::SetMusicState {
+            user_id,
+            state: *packet,
+        })
+        .await;
 }

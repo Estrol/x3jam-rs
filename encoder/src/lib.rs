@@ -652,4 +652,24 @@ pub mod test {
         let encoded = buffer.into_inner();
         println!("{:x?}", encoded); // Should be empty
     }
+
+    #[test]
+    fn test_enum() {
+        #[repr(u8)]
+        #[derive(Debug, Clone, Copy, StructSerializer, StructDeserializer)]
+        pub enum TestEnum2 {
+            VariantA = 0x09,
+            VariantB = 0x00,
+            VariantC = 0x01,
+        }
+
+        let byte = [0x09];
+
+        let mut cursor = Cursor::new(&byte);
+        let mut decoded = TestEnum2::VariantB; // Initialize with any variant
+
+        cursor.read_struct(&mut decoded).unwrap();
+
+        assert_eq!(decoded as u8, TestEnum2::VariantA as u8);
+    }
 }

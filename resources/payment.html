@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Payment</title>
+<style>
+body {
+    background-color: black;
+    color: white;
+    font-family: Arial, sans-serif;
+    padding: 20px;
+    font-size: 12px;
+}
+
+h1 {
+    margin: 0 0 12px 0;
+    font-size: 16px;
+}
+
+.item {
+    margin: 6px 0;
+    padding: 6px 8px;
+    background: #1a1a1a;
+    border: 1px solid #333;
+}
+
+.button-row {
+    margin-top: 16px;
+}
+
+button {
+    padding: 6px 12px;
+    font-size: 12px;
+}
+</style>
+</head>
+<body>
+
+<h1>Payment</h1>
+
+<div id="content">Loading...</div>
+
+<div class="button-row">
+    <button type="button" onclick="confirmPayment()">Confirm</button>
+</div>
+
+<script type="text/javascript">
+if (!window.JSON) {
+    window.JSON = {};
+}
+
+if (!window.JSON.stringify) {
+    window.JSON.stringify = function (value) {
+        var type = typeof value;
+        var i;
+        var key;
+        var parts;
+
+        if (value === null) {
+            return "null";
+        }
+
+        if (type === "number" || type === "boolean") {
+            return String(value);
+        }
+
+        if (type === "string") {
+            return '"' + value
+                .replace(/\\/g, "\\\\")
+                .replace(/"/g, '\\"')
+                .replace(/\r/g, "\\r")
+                .replace(/\n/g, "\\n")
+                .replace(/\t/g, "\\t") + '"';
+        }
+
+        if (Object.prototype.toString.call(value) === "[object Array]") {
+            parts = [];
+            for (i = 0; i < value.length; i++) {
+                parts.push(JSON.stringify(value[i]));
+            }
+            return "[" + parts.join(",") + "]";
+        }
+
+        if (type === "object") {
+            parts = [];
+            for (key in value) {
+                if (value.hasOwnProperty(key)) {
+                    parts.push(JSON.stringify(key) + ":" + JSON.stringify(value[key]));
+                }
+            }
+            return "{" + parts.join(",") + "}";
+        }
+
+        return "null";
+    };
+}
+
+if (!window.JSON.parse) {
+    window.JSON.parse = function (text) {
+        return eval("(" + text + ")");
+    };
+}
+</script>
+
+<script type="text/javascript">
+var myId = "$MY_ID_REPLACED$";
+var myData = $MY_DATA_REPLACED$;
+
+function escapeHtml(text) {
+    var div = document.createElement("div");
+    div.appendChild(document.createTextNode(text));
+    return div.innerHTML;
+}
+
+function renderItems() {
+    var container = document.getElementById("content");
+    var html = "";
+
+    if (!myData || !myData.length) {
+        container.innerHTML = "No items to buy.";
+        return;
+    }
+
+    html += "<div>Items to buy:</div>";
+
+    for (var i = 0; i < myData.length; i++) {
+        var item = myData[i];
+        html += "<div class='item'>- [" + item.id + "] " + escapeHtml(item.name) + "</div>";
+    }
+
+    container.innerHTML = html;
+}
+
+function confirmPayment() {
+    var xhr = new XMLHttpRequest();
+    xhr.open("POST", "/api/payment", true);
+    xhr.setRequestHeader("Content-Type", "application/json");
+
+    xhr.onreadystatechange = function () {
+        if (xhr.readyState !== 4) return;
+
+        if (xhr.status === 200) {
+            document.getElementById("content").innerHTML = "Payment submitted successfully.";
+        } else {
+            document.getElementById("content").innerHTML = "Payment failed. HTTP " + xhr.status;
+        }
+    };
+
+    var payloadData = [];
+    var i;
+
+    for (i = 0; i < myData.length; i++) {
+        payloadData.push({ id: myData[i].id, amount: myData[i].amount });
+    }
+
+    xhr.send(JSON.stringify({
+        gameid: myId,
+        items: payloadData
+    }));
+}
+
+renderItems();
+</script>
+
+</body>
+</html>

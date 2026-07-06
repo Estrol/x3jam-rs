@@ -14,16 +14,18 @@ pub enum EventId {
     ListRoomOnRoomPlayerCountChanged = 0x07D9, // Done
 
     // Room
-    RoomOnPlayerEnter = 0x0BBC,    // Done
-    RoomOnPlayerLeave = 0x0BBF,    // Done
-    RoomOnChat = 0x0BC4,           // Done
-    RoomOnReadyChanged = 0x0FA9,   // Done
-    RoomOnMusicIdChanged = 0x0FA1, // Done
-    RoomOnArenaChanged = 0x0FA3,   // Done
-    RoomOnTeamChanged = 0x0FA5,    // Done
-    RoomOnSkillChanged = 0x0FB8,   // Done
-    RoomOnNameChanged = 0x0BB9,    // Done
-    RoomOnGameStart = 0x0FAB,      // Done
+    RoomOnPlayerEnter = 0x0BBC,       // Done
+    RoomOnPlayerLeave = 0x0BBF,       // Done
+    RoomOnChat = 0x0BC4,              // Done
+    RoomOnReadyChanged = 0x0FA9,      // Done
+    RoomOnMusicIdChanged = 0x0FA1,    // Done
+    RoomOnArenaChanged = 0x0FA3,      // Done
+    RoomOnTeamChanged = 0x0FA5,       // Done
+    RoomOnSkillChanged = 0x0FB8,      // Done
+    RoomOnNameChanged = 0x0BB9,       // Done
+    RoomOnGameStart = 0x0FAB,         // Done
+    RoomOnSlotChanged = 0x0FBC,       // Done
+    RoomOnMusicStateChanged = 0x0FBA, // Done
 
     // Game
     GameOnLoadingReady = 0x0FAD,
@@ -33,6 +35,8 @@ pub enum EventId {
     GameOnSubmitScore = 0x0FB1,
 
     // O2Hook2's Extensions
+    #[cfg(not(feature = "disable-o2hook2-mod"))]
     RoomOnModifierChanged = 0xAABA,
+    #[cfg(not(feature = "disable-o2hook2-mod"))]
     RoomOnAllModifiersChanged = 0xAABB,
 }

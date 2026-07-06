@@ -49,10 +49,20 @@ pub enum ResponseId {
     GameFinish = 0x0FB2,
     SubmitScore = 0x0FB1,
 
-    // O2Hook2's Extensions
-    RequestVersion = 0xAAAA,
-    RejectVersion = 0xAAAC,
+    // Shop
+    ShopActionBuy = 0x1398,
+    ShopActionSync = 0x1389,
 
+    // MyRoom
+    EquipItem = 0x138D,
+
+    // O2Hook2's Extensions
+    #[cfg(not(feature = "disable-o2hook2-mod"))]
+    RequestVersion = 0xAAAA,
+    #[cfg(not(feature = "disable-o2hook2-mod"))]
+    RejectVersion = 0xAAAC,
+    #[cfg(not(feature = "disable-o2hook2-mod"))]
     RoomSetModifier = 0xAAB0,
+    #[cfg(not(feature = "disable-o2hook2-mod"))]
     RoomSetAllModifiers = 0xAAB1,
 }

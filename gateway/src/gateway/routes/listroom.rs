@@ -1,13 +1,21 @@
 use database::Equipment;
 
 use crate::{
-    channel::ChannelCommand, gateway::{
-        commands::{EventId, ResponseId},
-        itemlist::GameModifierType,
-    }, room::{
-        ModifierReport, MusicId, MusicIdEntry, RoomArena, RoomDifficulty, RoomMode, RoomSpeed, RoomStatus, RoomWeakHandle, SkillId, TeamId,
-    }, user::{ItemId, User},
+    channel::ChannelCommand,
+    gateway::{
+        commands::ResponseId,
+        events::room::PlayingState,
+    },
+    itemlist::GameModifierType,
+    room::{
+        ModifierReport, MusicId, RoomArena, RoomDifficulty, RoomMode, RoomSpeed, RoomStatus,
+        RoomWeakHandle, SkillId, TeamId,
+    },
+    user::{ItemId, User},
 };
+
+#[cfg(not(feature = "disable-o2hook2-mod"))]
+use crate::gateway::commands::EventId;
 
 #[derive(encoder::StructSerializer)]
 pub struct ServerMusicEntry {
@@ -77,8 +85,8 @@ async fn handle_server_list(client: &mut super::Client, _packet: &()) {
         .expect("Failed to send server list response");
 }
 
-#[gateway_derive::route(RequestId::ListRoomGetPlayerList)]
-async fn handle_client_list(client: &mut super::Client, packet: &Vec<MusicIdEntry>) {
+#[gateway_derive::route(RequestId::ListRoomGetClientList)]
+async fn handle_client_list(client: &mut super::Client, packet: &Vec<MusicId>) {
     let Some((user_id, ch)) = client.channel() else {
         println!(
             "Client {} is not in a channel, cannot get server list",
@@ -164,7 +172,7 @@ impl std::default::Default for RoomEntry {
             state: RoomStatus::Waiting,
             name: DEFAULT_TITLE.to_owned(),
             is_password: false,
-            ojn_id: MusicId(0),
+            ojn_id: MusicId::new(0),
             difficulty: RoomDifficulty::Easy,
             mode: RoomMode::Solo,
             speed: RoomSpeed::Speed05,
@@ -216,29 +224,31 @@ async fn handle_get_room_list(client: &mut super::Client, _packet: &()) {
         .expect("Failed to send room list response");
 }
 
-#[gateway_derive::route(RequestId::ListRoomGetPlayerList)]
-async fn handle_get_player_list(client: &mut super::Client, _packet: &()) {
-    let Some((_, channel)) = client.channel() else {
-        println!(
-            "Client {} is not in a channel, cannot get player list",
-            client.id
-        );
-        return;
-    };
+#[derive(Debug, Clone, encoder::StructSerializer)]
+pub struct EffectEntry {
+    pub id: u32,
+    pub amount: u32,
+}
 
-    let Ok(users) = channel.send::<Vec<UserInfoEntry>>(ChannelCommand::GetUsers).await else {
-        println!(
-            "Failed to get user list for channel: {}:{}",
-            channel.region(),
-            channel.id()
-        );
-        return;
-    };
-
-    client
-        .send_packet(ResponseId::ListRoomGetPlayerList, &users)
-        .await
-        .expect("Failed to send player list response");
+#[derive(Debug, Clone, encoder::StructSerializer)]
+pub struct CharacterResponse {
+    pub invalid: u32,
+    pub nickname: std::ffi::CString,
+    pub gender: u8,
+    pub gem: u32,
+    pub mcash: u32,
+    pub o2cash: u32,
+    pub level: u32,
+    pub win: u32,
+    pub lose: u32,
+    pub draw: u32,
+    pub play_count: u32,
+    pub experience: u32,
+    pub is_admin: bool,
+    pub equipment: Equipment,
+    pub inventory: [ItemId; 30],
+    pub padding: [u32; 5],
+    pub effects: Vec<EffectEntry>,
 }
 
 #[gateway_derive::route(RequestId::ListRoomGetCharacter)]
@@ -251,35 +261,8 @@ async fn handle_get_character(client: &mut super::Client, _packet: &()) {
         return;
     };
 
-    #[derive(Debug, encoder::StructSerializer)]
-    pub struct EffectEntry {
-        id: u32,
-        amount: u32,
-    }
-
-    #[derive(Debug, encoder::StructSerializer)]
-    pub struct CharacterResponse {
-        invalid: u32,
-        nickname: std::ffi::CString,
-        gender: u8,
-        gem: u32,
-        mcash: u32,
-        o2cash: u32,
-        level: u32,
-        win: u32,
-        lose: u32,
-        draw: u32,
-        play_count: u32,
-        experience: u32,
-        is_admin: bool,
-        equipment: Equipment,
-        inventory: [ItemId; 30],
-        padding: [u32; 5],
-        effects: Vec<EffectEntry>,
-    }
-
     let response = {
-        let lists = crate::gateway::GET_ITEM_LIST();
+        let lists = crate::itemlist::get();
 
         let mut effects = Vec::new();
         for i in user.inventory.iter().filter(|item| item.id != 0) {
@@ -301,7 +284,7 @@ async fn handle_get_character(client: &mut super::Client, _packet: &()) {
             gender: 1,
             gem: user.info.o2gems,
             mcash: user.info.mcash,
-            o2cash: user.info.o2gems,
+            o2cash: user.info.point,
             level: user.level(),
             win: 0,
             lose: 0,
@@ -355,9 +338,9 @@ pub struct MemberInfo {
     pub is_room_master: bool,
     pub color: TeamId,
     pub ready: bool,
-    pub unk: u8,
+    pub state: PlayingState,
     pub equipment: Equipment,
-    pub list: Vec<MusicIdEntry>,
+    pub list: Vec<MusicId>,
 }
 
 #[derive(encoder::StructSerializer, Clone, Copy, PartialEq, Eq)]
@@ -421,7 +404,7 @@ impl JoinRoomResponse {
             slot: 0,
             team: TeamId::Blue,
             name: DEFAULT_ROOM_NAME.to_owned(),
-            music_id: MusicId(0),
+            music_id: MusicId::new(0),
             arena: RoomArena::ARENA1,
             mode: RoomMode::Solo,
             diffculty: RoomDifficulty::Easy,
@@ -484,11 +467,13 @@ async fn handle_join_room(client: &mut super::Client, packet: &JoinRoomRequest) 
     };
 
     let Ok((response, data)) = ch
-        .send::<(JoinRoomResponse, Option<(RoomWeakHandle, ModifierReport)>)>(ChannelCommand::JoinRoom {
-            user_id,
-            room_id: packet.room_id,
-            password: password_option,
-        })
+        .send::<(JoinRoomResponse, Option<(RoomWeakHandle, ModifierReport)>)>(
+            ChannelCommand::JoinRoom {
+                user_id,
+                room_id: packet.room_id,
+                password: password_option,
+            },
+        )
         .await
     else {
         println!(
@@ -506,10 +491,14 @@ async fn handle_join_room(client: &mut super::Client, packet: &JoinRoomRequest) 
     if let Some((handle, modifier)) = data {
         client.room_handle = Some(handle);
 
+        #[cfg(not(feature = "disable-o2hook2-mod"))]
         client
             .send_packet(EventId::RoomOnAllModifiersChanged, &modifier)
             .await
             .expect("Failed to send modifier report response");
+
+        #[cfg(feature = "disable-o2hook2-mod")]
+        let _ = modifier; // To prevent unused variable warning when the feature is disabled
     }
 }
 
@@ -528,8 +517,14 @@ async fn handle_leave_room(client: &mut super::Client, _packet: &()) {
         return;
     };
 
-    let _ = ch.send::<()>(ChannelCommand::LeaveRoom { user_id })
-        .await;
+    if ch
+        .send::<()>(ChannelCommand::LeaveRoom { user_id })
+        .await
+        .is_err()
+    {
+        println!("Failed to send leave room command for client {}", client.id);
+        return;
+    }
 
     client.room_handle = None;
 

@@ -1,13 +1,16 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::{cmp::Reverse, collections::HashMap};
+use std::cmp::Reverse;
+
+#[cfg(not(feature = "disable-o2hook2-mod"))]
+use std::collections::HashMap;
 
 pub use super::arena::RoomArena;
 pub use super::difficulty::RoomDifficulty;
 pub use super::eventtype::GameEventType;
 pub use super::mode::RoomMode;
 pub use super::modifier::{ModifierReport, Modifiers};
-pub use super::music::{MusicId, MusicIdEntry};
+pub use super::music::MusicId;
 pub use super::skill::SkillId;
 pub use super::speed::RoomSpeed;
 pub use super::status::RoomStatus;
@@ -16,8 +19,13 @@ pub use super::team::TeamId;
 use crate::channel::ojnlist::Header;
 use crate::channel::{ChannelCommand, ChannelWeakHandle};
 use crate::gateway::events::listroom::ListRoomChangeRoomMaxPlayerEventArgs;
+use crate::gateway::events::room::{
+    PlayingState, RoomOnMusicStateChangedEventArgs, RoomOnSlotChangedEventArgs,
+};
 use crate::gateway::routes::game::ScoreSubmitResponse;
-use crate::gateway::routes::listroom::{JoinErrorCode, JoinRoomResponse, MemberInfo, PositionInfo, PositionStatus};
+use crate::gateway::routes::listroom::{
+    JoinErrorCode, JoinRoomResponse, MemberInfo, PositionInfo, PositionStatus,
+};
 use crate::{
     gateway::{
         commands::EventId,
@@ -32,10 +40,11 @@ use crate::{
                 ListRoomChangeRoomSkillEventArgs, ListRoomChangeRoomStatusEventArgs,
             },
             room::{
-                RoomOnArenaChangedEventArgs, RoomOnChatEventArgs, RoomOnGameStartEventArgs,
-                RoomOnModifierChangedEventArgs, RoomOnMusicIdChangedEventArgs,
-                RoomOnNameChangedEventArgs, RoomOnPlayerEnterEventArgs, RoomOnPlayerLeaveEventArgs,
-                RoomOnReadyEventArgs, RoomOnSkillChangedEventArgs, RoomOnTeamChangedEventArgs,
+                RoomOnArenaChangedEventArgs,
+                RoomOnChatEventArgs, RoomOnGameStartEventArgs,
+                RoomOnMusicIdChangedEventArgs, RoomOnNameChangedEventArgs,
+                RoomOnPlayerEnterEventArgs, RoomOnPlayerLeaveEventArgs, RoomOnReadyEventArgs,
+                RoomOnSkillChangedEventArgs, RoomOnTeamChangedEventArgs,
             },
         },
         routes::{
@@ -45,6 +54,9 @@ use crate::{
     },
     user::User,
 };
+
+#[cfg(not(feature = "disable-o2hook2-mod"))]
+use crate::gateway::events::room::{RoomOnAllModifiersChangedEventArgs, RoomOnModifierChangedEventArgs};
 
 #[derive(Debug, Clone, Default)]
 pub struct GameData {
@@ -72,6 +84,7 @@ pub enum UserSlot {
         host: bool,
         ready: bool,
         data: GameData,
+        state: PlayingState,
 
         user: User,
     },
@@ -116,6 +129,8 @@ pub struct Room {
 
     pub min_level: u8,
     pub max_level: u8,
+
+    #[cfg(not(feature = "disable-o2hook2-mod"))]
     pub modifiers: HashMap<Modifiers, ModifierValue>,
 
     pub join_pos_counter: u64, // Counter to assign join positions to players
@@ -133,7 +148,7 @@ impl Room {
         mode: RoomMode,
         min_level: u8,
         max_level: u8,
-    ) -> Self {
+    ) -> (Self, ModifierReport) {
         let mut room = Room {
             id,
             counter,
@@ -146,13 +161,14 @@ impl Room {
             arena: RoomArena::ARENA1,
             arena_random: false,
             speed: RoomSpeed::Speed10,
-            music_id: MusicId(0),
+            music_id: MusicId::new(0),
             header: None,
             status: RoomStatus::Waiting,
             skill_slot: Vec::new(),
             skill_seed: gen_random_seed(),
             max_level,
             min_level,
+            #[cfg(not(feature = "disable-o2hook2-mod"))]
             modifiers: HashMap::from_iter([
                 (Modifiers::Rate, ModifierValue::Float(1.0)),
                 (Modifiers::Fln, ModifierValue::U32(0)),
@@ -171,12 +187,47 @@ impl Room {
             team: room.next_color(),
             data: GameData::default(),
             user: user.clone(),
+            state: PlayingState::Waiting,
             join_pos: 0,
         };
 
         room.counter.store(1, std::sync::atomic::Ordering::SeqCst);
 
-        room
+        #[cfg(not(feature = "disable-o2hook2-mod"))]
+        {
+            let modifier = room.get_modifier_report();
+            (room, modifier)
+        }
+        #[cfg(feature = "disable-o2hook2-mod")]
+        {
+            (room, ModifierReport::default())
+        }
+    }
+
+    pub async fn heartbeat(&mut self) {
+        let disconnected: Vec<u64> = self
+            .players
+            .iter()
+            .filter_map(|slot| {
+                if let UserSlot::User { user, .. } = slot {
+                    if let Some(sender) = user.sender.as_ref() {
+                        if sender.is_closed() {
+                            return Some(user.id);
+                        } else {
+                            return None;
+                        }
+                    } else {
+                        return Some(user.id);
+                    }
+                }
+
+                None
+            })
+            .collect();
+
+        for user_id in disconnected {
+            self.remove_user(user_id).await;
+        }
     }
 
     pub fn get_user_slot_index(&self, user: u64) -> Option<usize> {
@@ -233,9 +284,22 @@ impl Room {
         current
     }
 
-    pub async fn add_user(&mut self, user: &User, password: Option<String>) -> (JoinRoomResponse, Option<ModifierReport>) {
+    pub fn find_same_user(&self, user: &User) -> Option<usize> {
+        self.players.iter().position(|p| match p {
+            UserSlot::User {
+                user: player_user, ..
+            } => player_user.id == user.id,
+            _ => false,
+        })
+    }
+
+    pub async fn add_user(
+        &mut self,
+        user: &User,
+        password: Option<String>,
+    ) -> (JoinRoomResponse, Option<ModifierReport>) {
         if self.password.is_some() && self.password != password {
-            return (JoinRoomResponse::invalid_password(), None)
+            return (JoinRoomResponse::invalid_password(), None);
         }
 
         let (slot_idex, team) = {
@@ -249,6 +313,10 @@ impl Room {
                 return (JoinRoomResponse::room_full(), None);
             };
 
+            if let Some(_) = self.find_same_user(user) {
+                return (JoinRoomResponse::user_not_found(), None);
+            }
+
             let color = self.next_color();
             let join_pos = self.get_next_counter();
 
@@ -259,6 +327,7 @@ impl Room {
                 team: color,
                 data: GameData::default(),
                 user: user.clone(),
+                state: PlayingState::Waiting,
                 join_pos,
             };
 
@@ -291,7 +360,11 @@ impl Room {
         }; 7];
 
         let mut index = 0;
+
+        #[cfg(not(feature = "disable-o2hook2-mod"))]
         let modifier = self.get_modifier_report();
+        #[cfg(feature = "disable-o2hook2-mod")]
+        let modifier = ModifierReport::default();
 
         for (i, user) in self.players.iter().enumerate() {
             if i == slot_idex as usize {
@@ -308,6 +381,7 @@ impl Room {
                     host,
                     ready,
                     user,
+                    state,
                     ..
                 } => {
                     slot.status = PositionStatus::Occupied;
@@ -322,7 +396,7 @@ impl Room {
                         is_room_master: *host,
                         color: *team,
                         ready: *ready,
-                        unk: 0,
+                        state: *state,
                         equipment: user.equipment(),
                         list: user.music_list(),
                     };
@@ -360,7 +434,8 @@ impl Room {
                 premium: 0,
             },
             None,
-        ).await;
+        )
+        .await;
 
         (response, Some(modifier))
     }
@@ -409,7 +484,7 @@ impl Room {
                         room_master_slot: host as u8,
                         premium: 0,
                     },
-                    None
+                    None,
                 );
 
                 println!(
@@ -465,7 +540,8 @@ impl Room {
                 status,
             },
             None,
-        ).await;
+        )
+        .await;
     }
 
     pub async fn set_ready(&mut self, user: u64) {
@@ -499,7 +575,7 @@ impl Room {
     }
 
     pub async fn start_game(&mut self, user_id: u64) -> GameStartResult {
-        if self.is_host(user_id) == false {
+        if !self.is_host(user_id) {
             return GameStartResult::NotHost;
         }
 
@@ -515,6 +591,15 @@ impl Room {
                 *data = GameData::default();
             }
         }
+
+        #[cfg(not(feature = "disable-o2hook2-mod"))]
+        self.broadcast(
+            EventId::RoomOnAllModifiersChanged,
+            RoomOnAllModifiersChangedEventArgs {
+                modifiers: self.get_modifier_report(),
+            },
+            None,
+        );
 
         self.set_status(RoomStatus::Playing).await;
 
@@ -540,7 +625,12 @@ impl Room {
         GameStartResult::Success
     }
 
-    pub async fn set_name(&mut self, name: &str) {
+    pub async fn set_name(&mut self, user_id: u64, name: &str) {
+        if !self.is_host(user_id) {
+            println!("User {} is not the host of room {}", user_id, self.id);
+            return;
+        }
+
         self.title = name.to_string();
 
         self.broadcast(
@@ -563,28 +653,41 @@ impl Room {
     }
 
     pub fn get_name_rate(&self) -> String {
-        let title = if self.modifiers.contains_key(&Modifiers::Rate)
-            && let ModifierValue::Float(rate) = self.modifiers[&Modifiers::Rate]
-            && rate != 1.0
-        {
-            format!("[{:.2}x] {}", rate, self.title)
+        #[cfg(not(feature = "disable-o2hook2-mod"))]
+        let title = if let Some(ModifierValue::Float(rate)) = self.modifiers.get(&Modifiers::Rate) {
+            if *rate != 1.0 {
+                format!("[{:.2}x] {}", rate, self.title)
+            } else {
+                self.title.clone()
+            }
         } else {
             self.title.clone()
         };
+
+        #[cfg(feature = "disable-o2hook2-mod")]
+        let title = self.title.clone();
 
         title
     }
 
     pub async fn set_music_id(
         &mut self,
+        user_id: u64,
         music_id: MusicId,
         difficulty: RoomDifficulty,
         speed: RoomSpeed,
     ) {
+        if !self.is_host(user_id) {
+            println!("User {} is not the host of room {}", user_id, self.id); // Request forged?
+            return;
+        }
+
         if self.music_id != music_id {
-            let Ok(header) = self.channel_handle
+            let Ok(header) = self
+                .channel_handle
                 .send::<Option<Header>>(ChannelCommand::RequestOJNInfo { id: music_id })
-                .await else {
+                .await
+            else {
                 println!("Failed to fetch OJN info for music ID {}", music_id);
                 return;
             };
@@ -593,7 +696,7 @@ impl Room {
                 println!("OJN info not found for music ID {}", music_id);
                 return;
             };
-            
+
             self.header = Some(header);
         }
 
@@ -624,17 +727,30 @@ impl Room {
         .await;
     }
 
-    pub fn set_arena(&mut self, arena: RoomArena) {
+    pub fn set_arena(&mut self, user_id: u64, arena: RoomArena) {
+        if !self.is_host(user_id) {
+            println!("User {} is not the host of room {}", user_id, self.id);
+            return;
+        }
+
         self.arena = arena;
 
         self.broadcast(
             EventId::RoomOnArenaChanged,
-            RoomOnArenaChangedEventArgs { arena, random: self.arena_random },
+            RoomOnArenaChangedEventArgs {
+                arena,
+                random: self.arena_random,
+            },
             None,
         );
     }
 
-    pub async fn set_skills(&mut self, ring: Vec<SkillId>) {
+    pub async fn set_skills(&mut self, user_id: u64, ring: Vec<SkillId>) {
+        if !self.is_host(user_id) {
+            println!("User {} is not the host of room {}", user_id, self.id);
+            return;
+        }
+
         self.skill_slot = ring;
 
         self.broadcast(
@@ -744,34 +860,58 @@ impl Room {
     ) -> ScoreSubmitResponse {
         let max_notes = self.fetch_max_notes().await;
 
-        let rate = match self.modifiers.get(&Modifiers::Rate) {
-            Some(ModifierValue::Float(f)) => *f,
-            _ => 1.0,
-        };
-
-        let fln = match self.modifiers.get(&Modifiers::Fln) {
-            Some(ModifierValue::U32(v)) => *v,
-            _ => 0,
-        };
-
-        let sln = match self.modifiers.get(&Modifiers::Sln) {
-            Some(ModifierValue::U32(v)) => *v,
-            _ => 0,
-        };
-
-        let nln = match self.modifiers.get(&Modifiers::Nln) {
-            Some(ModifierValue::U32(v)) => *v,
-            _ => 0,
-        };
-
+        #[cfg(not(feature = "disable-o2hook2-mod"))]
+        let (rate, fln, sln, nln) = (
+            self.modifiers
+                .get(&Modifiers::Rate)
+                .and_then(|v| match v {
+                    ModifierValue::Float(f) => Some(*f),
+                    _ => None,
+                })
+                .unwrap_or(1.0),
+            self.modifiers
+                .get(&Modifiers::Fln)
+                .and_then(|v| match v {
+                    ModifierValue::U32(v) => Some(*v),
+                    _ => None,
+                })
+                .unwrap_or(0),
+            self.modifiers
+                .get(&Modifiers::Sln)
+                .and_then(|v| match v {
+                    ModifierValue::U32(v) => Some(*v),
+                    _ => None,
+                })
+                .unwrap_or(0),
+            self.modifiers
+                .get(&Modifiers::Nln)
+                .and_then(|v| match v {
+                    ModifierValue::U32(v) => Some(*v),
+                    _ => None,
+                })
+                .unwrap_or(0),
+        );
 
         // Early return: Invert the check to avoid deep nesting
         let slot = match self.get_user_slot_mut(user) {
             Some((slot, UserSlot::User { data, .. })) => {
-                if result.song_rate != rate && result.fln != fln && result.sln != sln && result.nln != nln {
+                #[cfg(not(feature = "disable-o2hook2-mod"))]
+                if result.song_rate != rate
+                    && result.fln != fln
+                    && result.sln != sln
+                    && result.nln != nln
+                {
                     println!(
                         "[Warn] User {} submitted score with mismatched modifiers: expected rate {}, fln {}, sln {}, nln {}, but got rate {}, fln {}, sln {}, nln {}",
-                        user, rate, fln, sln, nln, result.song_rate, result.fln, result.sln, result.nln
+                        user,
+                        rate,
+                        fln,
+                        sln,
+                        nln,
+                        result.song_rate,
+                        result.fln,
+                        result.sln,
+                        result.nln
                     );
                     return ScoreSubmitResponse {
                         slot: slot as u8,
@@ -830,11 +970,14 @@ impl Room {
     }
 
     async fn fetch_max_notes(&self) -> i32 {
-        self.header.as_ref().map(|h| match self.difficulty {
-            RoomDifficulty::Easy => h.note_count[0],
-            RoomDifficulty::Normal => h.note_count[1],
-            RoomDifficulty::Hard => h.note_count[2],
-        }).unwrap_or(0)
+        self.header
+            .as_ref()
+            .map(|h| match self.difficulty {
+                RoomDifficulty::Easy => h.note_count[0],
+                RoomDifficulty::Normal => h.note_count[1],
+                RoomDifficulty::Hard => h.note_count[2],
+            })
+            .unwrap_or(0)
     }
 
     async fn process_match_results(&mut self, max_notes: i32) {
@@ -861,30 +1004,69 @@ impl Room {
         let timestamp = chrono::Utc::now().to_utc();
         let skill_ids: Vec<u32> = self.skill_slot.iter().map(|s| s.0).collect(); // Compute once
 
-        let rate = match self.modifiers.get(&Modifiers::Rate) {
-            Some(ModifierValue::Float(f)) => *f,
-            _ => 1.0,
-        };
+        // let rate = match self.modifiers.get(&Modifiers::Rate) {
+        //     Some(ModifierValue::Float(f)) => *f,
+        //     _ => 1.0,
+        // };
 
-        let timing = match self.modifiers.get(&Modifiers::Timing) {
-            Some(ModifierValue::U32(v)) => *v,
-            _ => 0,
-        };
+        // let timing = match self.modifiers.get(&Modifiers::Timing) {
+        //     Some(ModifierValue::U32(v)) => *v,
+        //     _ => 0,
+        // };
 
-        let fln = match self.modifiers.get(&Modifiers::Fln) {
-            Some(ModifierValue::U32(v)) => *v,
-            _ => 0,
-        };
+        // let fln = match self.modifiers.get(&Modifiers::Fln) {
+        //     Some(ModifierValue::U32(v)) => *v,
+        //     _ => 0,
+        // };
 
-        let sln = match self.modifiers.get(&Modifiers::Sln) {
-            Some(ModifierValue::U32(v)) => *v,
-            _ => 0,
-        };
+        // let sln = match self.modifiers.get(&Modifiers::Sln) {
+        //     Some(ModifierValue::U32(v)) => *v,
+        //     _ => 0,
+        // };
 
-        let nln = match self.modifiers.get(&Modifiers::Nln) {
-            Some(ModifierValue::U32(v)) => *v,
-            _ => 0,
-        };
+        // let nln = match self.modifiers.get(&Modifiers::Nln) {
+        //     Some(ModifierValue::U32(v)) => *v,
+        //     _ => 0,
+        // };
+
+        #[cfg(not(feature = "disable-o2hook2-mod"))]
+        let (rate, fln, sln, nln, timing) = (
+            self.modifiers
+                .get(&Modifiers::Rate)
+                .and_then(|v| match v {
+                    ModifierValue::Float(f) => Some(*f),
+                    _ => None,
+                })
+                .unwrap_or(1.0),
+            self.modifiers
+                .get(&Modifiers::Fln)
+                .and_then(|v| match v {
+                    ModifierValue::U32(v) => Some(*v),
+                    _ => None,
+                })
+                .unwrap_or(0),
+            self.modifiers
+                .get(&Modifiers::Sln)
+                .and_then(|v| match v {
+                    ModifierValue::U32(v) => Some(*v),
+                    _ => None,
+                })
+                .unwrap_or(0),
+            self.modifiers
+                .get(&Modifiers::Nln)
+                .and_then(|v| match v {
+                    ModifierValue::U32(v) => Some(*v),
+                    _ => None,
+                })
+                .unwrap_or(0),
+            self.modifiers
+                .get(&Modifiers::Timing)
+                .and_then(|v| match v {
+                    ModifierValue::U32(v) => Some(*v),
+                    _ => None,
+                })
+                .unwrap_or(0),
+        );
 
         // Process each player
         for (i, player) in self.players.iter_mut().enumerate() {
@@ -933,11 +1115,11 @@ impl Room {
                         ..Default::default()
                     };
 
-                    // Prepare DB Score Payload
-                    scores_to_save.push(database::Score {
+                    #[allow(unused_mut)]
+                    let mut score = database::Score {
                         id: 0,
                         user_id: user.id,
-                        music_id: self.music_id.0 as u32,
+                        music_id: self.music_id.songid(),
                         score: data.score as u32,
                         cool: data.cool as u32,
                         good: data.good as u32,
@@ -945,15 +1127,22 @@ impl Room {
                         miss: data.miss as u32,
                         max_combo: data.max_combo as u32,
                         jam_combo: data.jam_combo as u32,
-                        timing: timing,
-                        rate: rate,
-                        fln,
-                        sln,
-                        nln,
-                        arragement: [7, 6, 5, 4, 3, 2, 1],
                         skills: skill_ids.clone(),
                         timestamp,
-                    });
+                        ..Default::default()
+                    };
+
+                    #[cfg(not(feature = "disable-o2hook2-mod"))]
+                    {
+                        score.timing = timing;
+                        score.rate = rate;
+                        score.fln = fln;
+                        score.sln = sln;
+                        score.nln = nln;
+                    }
+
+                    // Prepare DB Score Payload
+                    scores_to_save.push(score);
 
                     // Spawn save task for individual user
                     let user_clone = user.clone();
@@ -971,7 +1160,7 @@ impl Room {
         if !scores_to_save.is_empty() {
             let room_id = self.id;
             tokio::spawn(async move {
-                let pool = crate::gateway::GET_DATABASE().await;
+                let pool = crate::database::get();
                 if let Err(e) = pool.submit_scores(&scores_to_save).await {
                     println!("[Error] Failed to save scores for room {}: {}", room_id, e);
                 }
@@ -997,6 +1186,7 @@ impl Room {
         }
     }
 
+    #[cfg(not(feature = "disable-o2hook2-mod"))]
     pub fn get_modifier_report(&self) -> ModifierReport {
         let rate = match self.modifiers.get(&Modifiers::Rate) {
             Some(ModifierValue::Float(f)) => *f,
@@ -1032,7 +1222,13 @@ impl Room {
         }
     }
 
-    pub async fn set_modifier(&mut self, modifier: Modifiers, value: u32) {
+    #[cfg(not(feature = "disable-o2hook2-mod"))]
+    pub async fn set_modifier(&mut self, user_id: u64, modifier: Modifiers, value: u32) {
+        if !self.is_host(user_id) {
+            println!("User {} is not the host of room {}", user_id, self.id);
+            return;
+        }
+
         match modifier {
             Modifiers::Rate => self
                 .modifiers
@@ -1054,7 +1250,7 @@ impl Room {
 
         if modifier == Modifiers::Rate {
             let title = self.title.clone();
-            self.set_name(&title).await;
+            self.set_name(user_id, &title).await;
         }
 
         self.broadcast(
@@ -1064,10 +1260,16 @@ impl Room {
         );
     }
 
-    pub async fn set_all_modifiers(&mut self, modifiers: ModifierReport) {
+    #[cfg(not(feature = "disable-o2hook2-mod"))]
+    pub async fn set_all_modifiers(&mut self, user_id: u64, modifiers: ModifierReport) {
+        if !self.is_host(user_id) {
+            println!("User {} is not the host of room {}", user_id, self.id);
+            return;
+        }
+
         if modifiers.rate != 1.0 {
             let title = self.title.clone();
-            self.set_name(&title).await;
+            self.set_name(user_id, &title).await;
         }
 
         self.modifiers
@@ -1083,21 +1285,21 @@ impl Room {
 
         self.broadcast(
             EventId::RoomOnModifierChanged,
-            RoomOnModifierChangedEventArgs {
-                modifier: Modifiers::Rate,
-                value: (modifiers.rate * 100.0) as u32,
+            RoomOnAllModifiersChangedEventArgs {
+                modifiers: self.get_modifier_report(),
             },
             None,
         );
     }
 
     pub async fn leave_game(&mut self, user: u64) -> bool {
-        let (slot, level) = if let Some((slot, UserSlot::User { user, .. })) = self.get_user_slot_mut(user) {
-            (slot, user.level())
-        } else {
-            println!("User is not in room {}", self.id);
-            return false;
-        };
+        let (slot, level) =
+            if let Some((slot, UserSlot::User { user, .. })) = self.get_user_slot_mut(user) {
+                (slot, user.level())
+            } else {
+                println!("User is not in room {}", self.id);
+                return false;
+            };
 
         self.broadcast(
             EventId::GameOnPlayerLeave,
@@ -1131,7 +1333,8 @@ impl Room {
     }
 
     pub async fn chat(&mut self, user: u64, message: &str) {
-        let nickname = if let Some((_, UserSlot::User { user, .. })) = self.get_user_slot_mut(user) {
+        let nickname = if let Some((_, UserSlot::User { user, .. })) = self.get_user_slot_mut(user)
+        {
             to_cstring(&user.nickname())
         } else {
             println!("User is not in room {}", self.id);
@@ -1143,6 +1346,84 @@ impl Room {
             RoomOnChatEventArgs {
                 author: nickname,
                 message: to_cstring(message),
+            },
+            None,
+        );
+    }
+
+    pub async fn toggle_slot(&mut self, user_id: u64, slot: usize) {
+        if !self.is_host(user_id) {
+            println!("User {} is not the host of room {}", user_id, self.id);
+            return;
+        }
+
+        if slot >= self.players.len() {
+            println!("Invalid slot index {} for room {}", slot, self.id);
+            return;
+        }
+
+        let status = match &mut self.players[slot] {
+            UserSlot::Available => {
+                self.players[slot] = UserSlot::Locked;
+
+                PositionStatus::Locked
+            }
+            UserSlot::Locked => {
+                self.players[slot] = UserSlot::Available;
+
+                PositionStatus::Occupied
+            }
+            UserSlot::User { .. } => {
+                let slot = std::mem::replace(&mut self.players[slot], UserSlot::Available);
+
+                // User kicked
+                let _ = self.channel_handle.send::<()>(ChannelCommand::Kicked {
+                    user_id: match slot {
+                        UserSlot::User { user, .. } => user.id,
+                        _ => unreachable!(),
+                    },
+                });
+
+                PositionStatus::Empty
+            }
+        };
+
+        self.broadcast_channel(
+            EventId::ListRoomOnRoomPlayerCountChanged,
+            ListRoomChangeRoomMaxPlayerEventArgs {
+                id: self.id,
+                max_player: self.max_players() as u8,
+                current_player: self.player_count() as u8,
+                premium: 0,
+            },
+            None,
+        )
+        .await;
+
+        // Broadcast the change to all players
+        self.broadcast(
+            EventId::RoomOnSlotChanged,
+            RoomOnSlotChangedEventArgs {
+                slot: slot as u8,
+                status,
+            },
+            None,
+        );
+    }
+
+    pub async fn set_music_state(&mut self, user: u64, state_: PlayingState) {
+        let Some((slot, UserSlot::User { state, .. })) = self.get_user_slot_mut(user) else {
+            println!("User is not in room {}", self.id);
+            return;
+        };
+
+        *state = state_;
+
+        self.broadcast(
+            EventId::RoomOnMusicStateChanged,
+            RoomOnMusicStateChangedEventArgs {
+                slot: slot as u8,
+                state: state_,
             },
             None,
         );

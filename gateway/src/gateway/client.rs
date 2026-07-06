@@ -7,7 +7,10 @@ use tcpserver::{IClient, client};
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::{
-    channel::ChannelWeakHandle, gateway::{commands::EventId, events::IEventData, stateful::StatefulXor}, room::{MusicId, RoomWeakHandle}, user::User,
+    channel::ChannelWeakHandle,
+    gateway::{commands::EventId, events::IEventData, stateful::StatefulXor},
+    room::{MusicId, RoomWeakHandle},
+    user::User,
 };
 
 const MAX_PACKET_SIZE: usize = 1024 * 8; // 8 KB
@@ -20,6 +23,7 @@ pub struct Client {
     pub socket: tokio::net::TcpStream,
     pub buffer: [u8; MAX_PACKET_SIZE],
     pub data: Vec<u8>,
+    pub token: tokio_util::sync::CancellationToken,
 
     // Server data:
     pub xor: StatefulXor,
@@ -33,7 +37,7 @@ pub struct Client {
     pub session_entered: bool,
     pub channel_handle: Option<ChannelWeakHandle>,
     pub room_handle: Option<RoomWeakHandle>,
-    pub room_id: Option<u32>,
+    pub version_checked: bool,
 }
 
 impl Client {
@@ -67,22 +71,22 @@ impl Client {
             self.id, id, length
         );
 
-        self.queue.push(data);
+        self.send(&data).await?;
         Ok(())
     }
 
     pub fn begin(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         self.queue_begin = true;
-        self.queue.clear();
+        // self.queue.clear();
         Ok(())
     }
 
     pub async fn end(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         self.queue_begin = false;
 
-        for packet in std::mem::take(&mut self.queue) {
-            self.send(&packet).await?;
-        }
+        // for packet in std::mem::take(&mut self.queue) {
+        //     self.send(&packet).await?;
+        // }
 
         Ok(())
     }
@@ -120,13 +124,14 @@ impl Client {
     }
 }
 
-client!(Client, |socket, run, id| {
+client!(Client, |socket, run, id, token| {
     let xor = StatefulXor::new();
 
     Client {
         id,
         run,
         socket,
+        token,
         buffer: [0; 1024 * 8],
         data: Vec::new(),
         xor,
@@ -138,6 +143,6 @@ client!(Client, |socket, run, id| {
         session_entered: false,
         channel_handle: None,
         room_handle: None,
-        room_id: None,
+        version_checked: false,
     }
 });

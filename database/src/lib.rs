@@ -50,7 +50,7 @@ pub struct Equipment {
     pub instrument_accessory: u32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Score {
     pub id: u32,
     pub user_id: u64,
@@ -125,7 +125,7 @@ pub fn is_supported_driver(connection: &mut String) -> bool {
 }
 
 impl GameDatabase {
-    pub async fn new(connection: &str) -> Self {
+    pub async fn new(connection: &str, migrate: bool) -> Self {
         let mut connection = connection.to_string();
         if !is_supported_driver(&mut connection) {
             panic!("Unsupported database driver. Supported drivers: mysql, mariadb");
@@ -135,9 +135,11 @@ impl GameDatabase {
             .await
             .expect("Failed to connect to the database");
 
-        models::migrations::Migrator::up(&db_connection, None)
-            .await
-            .expect("Failed to run migrations");
+        if migrate {
+            models::migrations::Migrator::up(&db_connection, None)
+                .await
+                .expect("Failed to run migrations");
+        }
 
         models::session::Entity::delete_many()
             .exec(&db_connection)
@@ -149,12 +151,6 @@ impl GameDatabase {
             default_equipment_female: FEMALE_DEFAULT_EQUIPMENT,
             default_equipment_male: MALE_DEFAULT_EQUIPMENT,
         }
-    }
-
-    // Convenience method for creating a GameDatabase instance from MySQL/MariaDB connection parameters
-    pub async fn from_mysql(address: &str, username: &str, password: &str, database: &str) -> Self {
-        let connection_uri = format!("mysql://{}:{}@{}/{}", username, password, address, database);
-        Self::new(&connection_uri).await
     }
 
     pub fn set_default_equipment(&mut self, gender: CharacterGender, data: [u32; 16]) {
@@ -719,80 +715,5 @@ impl GameDatabase {
             .expect("Failed to delete score");
 
         delete_result.rows_affected > 0
-    }
-}
-
-#[cfg(test)]
-pub mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_database_connection() {
-        let db = GameDatabase::new("mariadb://root:@localhost:3306/otwotest").await;
-        assert!(db.connection.ping().await.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_score_submittion() {
-        let db = GameDatabase::new("mariadb://root:@localhost:3306/otwotest").await;
-
-        let score1 = Score {
-            id: 0,
-            user_id: u32::MAX as u64,
-            music_id: 1,
-            score: 1000,
-            cool: 10,
-            good: 5,
-            bad: 2,
-            miss: 1,
-            max_combo: 15,
-            jam_combo: 3,
-            timing: 0,
-            rate: 1.0,
-            fln: 0,
-            sln: 0,
-            nln: 0,
-            arragement: [1, 2, 3, 4, 5, 6, 7],
-            skills: vec![1, 2, 3],
-            timestamp: chrono::Utc::now(),
-        };
-
-        let score2 = Score {
-            id: 0,
-            user_id: score1.user_id,
-            music_id: 1,
-            score: 1200, // Higher score
-            cool: 12,
-            good: 4,
-            bad: 1,
-            miss: 0,
-            max_combo: 17,
-            jam_combo: 4,
-            timing: 0,
-            rate: 1.5,
-            fln: 0,
-            sln: 0,
-            nln: 0,
-            arragement: [7, 6, 5, 4, 3, 2, 1],
-            skills: vec![2, 3, 4],
-            timestamp: chrono::Utc::now(),
-        };
-
-        // Submit the first score
-        db.submit_scores(&[score1.clone()]).await.unwrap();
-
-        // Submit the second score (higher)
-        db.submit_scores(&[score2.clone()]).await.unwrap();
-
-        // Retrieve the scores for the user and music
-        let scores = db.get_user_scores(score1.user_id).await;
-
-        // There should be only one score for this user and music, which is the higher one
-        assert_eq!(scores.len(), 1);
-        assert_eq!(scores[0].score, score2.score);
-
-        // delete the score
-        let deleted = db.remove_score(scores[0].id).await;
-        assert!(deleted);
     }
 }

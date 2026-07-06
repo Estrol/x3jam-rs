@@ -1,7 +1,5 @@
 use crate::{
-    gateway::{
-        commands::ResponseId,
-    },
+    gateway::commands::ResponseId,
     user::{User, UserError},
 };
 
@@ -45,6 +43,7 @@ pub async fn login_proc(client: &mut super::Client, request: &LoginRequest) {
         .expect("Failed to send login response");
 }
 
+#[allow(dead_code)]
 #[derive(encoder::StructSerializer)]
 struct VersionResponse {
     user_id: u32,
@@ -67,7 +66,7 @@ pub async fn reauth_proc(client: &mut super::Client, request: &LoginRequest) {
             } else {
                 if let Ok(mut user) = User::request_user(user_id, true).await {
                     user.sender = client.sender.clone();
-                    
+
                     client.user = Some(user);
                     client.session_entered = true;
 
@@ -92,6 +91,7 @@ pub async fn reauth_proc(client: &mut super::Client, request: &LoginRequest) {
         .expect("Failed to send re-auth response");
 
     // O2Hook2 extensions
+    #[cfg(not(feature = "disable-o2hook2-mod"))]
     if result == LoginResult::Success {
         let response = VersionResponse {
             user_id: client.user.as_ref().unwrap().id as u32,
@@ -101,13 +101,6 @@ pub async fn reauth_proc(client: &mut super::Client, request: &LoginRequest) {
             .send_packet(ResponseId::RequestVersion, &response)
             .await
             .expect("Failed to send version response");
-
-        // let test = std::ffi::CString::new("O2Hook2").unwrap();
-
-        // client
-        //     .send_packet(0xABCE as u16, &test)
-        //     .await
-        //     .expect("Failed to send re-auth completion packet");
     }
 }
 
@@ -130,25 +123,31 @@ pub struct VersionRequest {
     pub user_id: u32,
 }
 
+#[cfg(not(feature = "disable-o2hook2-mod"))]
 #[gateway_derive::route(RequestId::RequestVersion)]
-pub async fn request_version_proc(_client: &mut super::Client, request: &VersionRequest) {
+pub async fn request_version_proc(client: &mut super::Client, _request: &VersionRequest) {
+    #[allow(dead_code)] // TODO: fix the str2int
     const EXPECTED_VERSION: &str = "1.6.1";
 
-    if request.version != str2int(EXPECTED_VERSION.as_bytes()) {
-        // client
-        //     .send_packet(ResponseId::RejectVersion, &())
-        //     .await
-        //     .expect("Failed to send version response");
+    // if request.version != str2int(EXPECTED_VERSION.as_bytes()) {
+    //     // client
+    //     //     .send_packet(ResponseId::RejectVersion, &())
+    //     //     .await
+    //     //     .expect("Failed to send version response");
 
-        // let Some(sender) = client.sender.as_ref() else {
-        //     println!("Client sender is not available");
-        //     return;
-        // };
+    //     // let Some(sender) = client.sender.as_ref() else {
+    //     //     println!("Client sender is not available");
+    //     //     return;
+    //     // };
 
-        // sender
-        //     .send((EventId::Disconnect, Arc::new(DisconnectEventArgs)))
-        //     .expect("Failed to send disconnect event");
-    }
+    //     // sender
+    //     //     .send((EventId::Disconnect, Arc::new(DisconnectEventArgs)))
+    //     //     .expect("Failed to send disconnect event");
+
+    //     _client.version_checked = true;
+    // }
+
+    client.version_checked = true;
 }
 
 #[gateway_derive::route(RequestId::GatewayConnect)]

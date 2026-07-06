@@ -126,10 +126,10 @@ pub fn derive_iencode(input: TokenStream) -> TokenStream {
             // Check if crate is self-referential and adjust the path accordingly
             if std::env::var("CARGO_PKG_NAME").unwrap() == "encoder" {
                 quote! {
-                    impl crate::gateway::StructEncodeImpl for #name {
+                    impl crate::StructEncodeImpl for #name {
                         #[inline(always)]
                         fn impl_encode(&self, writer: &mut impl std::io::Write) -> std::io::Result<()> {
-                            pub use crate::gateway::byteorder_lite::{WriteBytesExt, LittleEndian};
+                            pub use crate::byteorder_lite::{WriteBytesExt, LittleEndian};
 
                             #(#stmts)*
 
@@ -165,10 +165,10 @@ pub fn derive_iencode(input: TokenStream) -> TokenStream {
 
             if std::env::var("CARGO_PKG_NAME").unwrap() == "encoder" {
                 quote! {
-                    impl crate::gateway::StructEncodeImpl for #name {
+                    impl crate::StructEncodeImpl for #name {
                         #[inline(always)]
                         fn impl_encode(&self, writer: &mut impl std::io::Write) -> std::io::Result<()> {
-                            pub use crate::gateway::byteorder_lite::{WriteBytesExt, LittleEndian};
+                            pub use crate::byteorder_lite::{WriteBytesExt, LittleEndian};
 
                             let value: #repr_type = (*self as #repr_type);
                             value.impl_encode(writer)
@@ -275,11 +275,11 @@ pub fn derive_idecode(input: TokenStream) -> TokenStream {
 
             if std::env::var("CARGO_PKG_NAME").unwrap() == "encoder" {
                 quote! {
-                    impl crate::gateway::StructDecodeImpl for #name {
+                    impl crate::StructDecodeImpl for #name {
                         #[inline(always)]
                         fn impl_decode(reader: &mut impl std::io::Read) -> std::io::Result<Self> {
-                            pub use crate::gateway::byteorder_lite::{ReadBytesExt, LittleEndian};
-                            pub use crate::gateway::StructDecodeImpl;
+                            pub use crate::byteorder_lite::{ReadBytesExt, LittleEndian};
+                            pub use crate::StructDecodeImpl;
 
                             let value: #repr_type = StructDecodeImpl::impl_decode(reader)?;
                             match value {
@@ -376,10 +376,10 @@ pub fn derive_idecode(input: TokenStream) -> TokenStream {
             // Check if crate is self-referential and adjust the path accordingly
             if std::env::var("CARGO_PKG_NAME").unwrap_or_default() == "encoder" {
                 quote! {
-                    impl crate::gateway::StructDecodeImpl for #name {
+                    impl crate::StructDecodeImpl for #name {
                         #[inline(always)]
                         fn impl_decode(reader: &mut impl std::io::Read) -> std::io::Result<Self> {
-                            pub use crate::gateway::byteorder_lite::{ReadBytesExt, LittleEndian};
+                            pub use crate::byteorder_lite::{ReadBytesExt, LittleEndian};
 
                             #(#stmts)*
 

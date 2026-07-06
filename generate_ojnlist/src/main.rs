@@ -1,6 +1,16 @@
 use std::io::{Read as _, Write as _};
 
 pub fn main() {
+    if std::env::args().any(|x| x == "--help" || x == "-h") {
+        println!("Usage: generate_ojnlist --path <path> --output <output>");
+        std::process::exit(0);
+    }
+
+    if std::mem::size_of::<Header>() != 300 {
+        eprintln!("Header size is not 300 bytes, please check the Header struct definition.");
+        std::process::exit(1);
+    }
+
     let args = std::env::args().collect::<Vec<String>>();
 
     // required args: --path <path> --output <output>
@@ -16,7 +26,11 @@ pub fn main() {
     let path = args[path_index.unwrap() + 1].clone();
     let output = args[output_index.unwrap() + 1].clone();
 
+    println!("Scanning path: {}", path);
+
     let mut headers = Vec::new();
+    // let limit = 1000;
+    // let mut iter = 0;
 
     for entry in std::fs::read_dir(path).unwrap() {
         let entry = entry.unwrap();
@@ -35,8 +49,20 @@ pub fn main() {
             file.read_exact(header_slice).unwrap();
 
             headers.push(unsafe { header.assume_init() });
+
+            // iter += 1;
+
+            // if iter > limit {
+            //     println!("Reached limit of {} files, stopping scan.", limit);
+            //     break;
+            // }
         }
     }
+
+    // sort by songid
+    headers.sort_by_key(|h| h.songid);
+
+    println!("Processing {} .ojn files", headers.len());
 
     let mut writer = std::fs::File::create(output).unwrap();
 
@@ -53,6 +79,8 @@ pub fn main() {
 
         writer.write_all(header_slice).unwrap();
     }
+
+    println!("Done!");
 }
 
 #[repr(C)]

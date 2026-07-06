@@ -1,17 +1,20 @@
-pub mod room;
 pub mod arena;
 pub mod difficulty;
 pub mod eventtype;
 pub mod mode;
 pub mod modifier;
 pub mod music;
+pub mod room;
+pub mod roomlist;
 pub mod skill;
 pub mod speed;
 pub mod status;
 pub mod team;
-pub mod roomlist;
 
-use std::{any::TypeId, sync::{Arc, atomic::AtomicUsize}};
+use std::{
+    any::TypeId,
+    sync::{Arc, atomic::AtomicUsize},
+};
 
 pub use arena::RoomArena;
 pub use difficulty::RoomDifficulty;
@@ -19,18 +22,29 @@ pub use eventtype::GameEventType;
 use futures::FutureExt as _;
 pub use mode::RoomMode;
 pub use modifier::{ModifierReport, Modifiers};
-pub use music::{MusicId, MusicIdEntry};
+pub use music::MusicId;
+pub use room::Room;
 pub use skill::SkillId;
 pub use speed::RoomSpeed;
 pub use status::RoomStatus;
 pub use team::TeamId;
-pub use room::Room;
 use tokio::sync::oneshot;
 
-use crate::{channel::ChannelWeakHandle, gateway::routes::{game::{GameEventPingRequest, ScoreSubmitRequest}, listroom::RoomEntry}, user::User};
+use crate::{
+    channel::ChannelWeakHandle,
+    gateway::{
+        events::room::PlayingState,
+        routes::{
+            game::{GameEventPingRequest, ScoreSubmitRequest},
+            listroom::RoomEntry,
+        },
+    },
+    user::User,
+};
 
 pub enum RoomCommand {
     GetEntryInfo,
+    Heartbeat,
 
     JoinRoom {
         user: User,
@@ -46,31 +60,39 @@ pub enum RoomCommand {
     },
 
     SetMusicId {
+        user_id: u64,
         music_id: MusicId,
         difficulty: RoomDifficulty,
         speed: RoomSpeed,
     },
     SetName {
+        user_id: u64,
         name: String,
     },
     SetArena {
+        user_id: u64,
         arena: RoomArena,
     },
     SetReady {
         user_id: u64,
     },
     SetSkills {
+        user_id: u64,
         skills: Vec<SkillId>,
     },
     SetTeam {
         user_id: u64,
         team: TeamId,
     },
+    #[cfg(not(feature = "disable-o2hook2-mod"))]
     SetModifier {
+        user_id: u64,
         modifier: Modifiers,
         value: u32,
     },
+    #[cfg(not(feature = "disable-o2hook2-mod"))]
     SetAllModifiers {
+        user_id: u64,
         modifiers: ModifierReport,
     },
 
@@ -94,6 +116,14 @@ pub enum RoomCommand {
     Chat {
         user_id: u64,
         message: String,
+    },
+    ToggleSlot {
+        user_id: u64,
+        slot: usize,
+    },
+    SetMusicState {
+        user_id: u64,
+        state: PlayingState,
     },
 }
 
@@ -144,7 +174,7 @@ impl RoomHandle {
                 .send(channel_request)
                 .map_err(|_| "Failed to send request to channel")?;
 
-            // SAFETY: We are returning a zeroed value for the type DST, which is expected to be () in this case. 
+            // SAFETY: We are returning a zeroed value for the type DST, which is expected to be () in this case.
             // This is safe because we are not actually using the value, and it will be ignored by the caller.
             Ok(unsafe { std::mem::zeroed() })
         } else {
@@ -163,7 +193,8 @@ impl RoomHandle {
                 .await
                 .map_err(|_| "Failed to receive response from channel")?;
 
-            if TypeId::of::<()>() == response.type_id() && TypeId::of::<DST>() != TypeId::of::<()>() {
+            if TypeId::of::<()>() == response.type_id() && TypeId::of::<DST>() != TypeId::of::<()>()
+            {
                 return Err("Function expect some data but operation return no data".into());
             }
 
@@ -217,7 +248,7 @@ impl RoomWeakHandle {
                 .send(channel_request)
                 .map_err(|_| "Failed to send request to channel")?;
 
-            // SAFETY: We are returning a zeroed value for the type DST, which is expected to be () in this case. 
+            // SAFETY: We are returning a zeroed value for the type DST, which is expected to be () in this case.
             // This is safe because we are not actually using the value, and it will be ignored by the caller.
             Ok(unsafe { std::mem::zeroed() })
         } else {
@@ -236,7 +267,8 @@ impl RoomWeakHandle {
                 .await
                 .map_err(|_| "Failed to receive response from channel")?;
 
-            if TypeId::of::<()>() == response.type_id() && TypeId::of::<DST>() != TypeId::of::<()>() {
+            if TypeId::of::<()>() == response.type_id() && TypeId::of::<DST>() != TypeId::of::<()>()
+            {
                 return Err("Function expect some data but operation return no data".into());
             }
 
@@ -259,11 +291,21 @@ pub async fn make_room(
     mode: RoomMode,
     min_lvl: u8,
     max_lvl: u8,
-) -> Result<RoomHandle, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<(RoomHandle, ModifierReport), Box<dyn std::error::Error + Send + Sync>> {
     let counter = Arc::new(AtomicUsize::new(0));
     let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel::<RoomRequest>();
 
-    let mut room = Room::new(caller, counter.clone(), channel_handle, id, name, password, mode, min_lvl, max_lvl);
+    let (mut room, modifier) = Room::new(
+        caller,
+        counter.clone(),
+        channel_handle,
+        id,
+        name,
+        password,
+        mode,
+        min_lvl,
+        max_lvl,
+    );
 
     let handle = tokio::spawn(async move {
         loop {
@@ -282,7 +324,15 @@ pub async fn make_room(
         }
     });
 
-    Ok(RoomHandle { id, counter, sender, join_handle: handle })
+    Ok((
+        RoomHandle {
+            id,
+            counter,
+            sender,
+            join_handle: handle,
+        },
+        modifier,
+    ))
 }
 
 pub struct RoomListRepository {
@@ -311,69 +361,86 @@ pub async fn process_command(room: &mut Room, mut command: RoomRequest) {
                 min_level: room.min_level,
                 max_level: room.max_level,
                 skills: room.skill_slot.clone(),
-                premium: 0
+                premium: 0,
             });
         }
+
+        RoomCommand::Heartbeat => {
+            room.heartbeat().await;
+        }
+
         RoomCommand::RoomChat { user_id, message } => {
             room.chat(user_id, &message).await;
         }
         RoomCommand::SetMusicId {
+            user_id,
             music_id,
             difficulty,
             speed,
         } => {
-            room
-                .set_music_id(music_id, difficulty, speed)
+            room.set_music_id(user_id, music_id, difficulty, speed)
                 .await;
         }
-        RoomCommand::SetName { name } => {
-            room.set_name(&name).await;
+        RoomCommand::SetName { user_id, name } => {
+            room.set_name(user_id, &name).await;
         }
-        RoomCommand::SetArena { arena } => {
-            room.set_arena(arena);
+        RoomCommand::SetArena { user_id, arena } => {
+            room.set_arena(user_id, arena);
         }
         RoomCommand::SetReady { user_id } => {
             room.set_ready(user_id).await;
         }
-        RoomCommand::SetSkills { skills } => {
-            room.set_skills(skills).await;
+        RoomCommand::SetSkills { user_id, skills } => {
+            room.set_skills(user_id, skills).await;
         }
         RoomCommand::SetTeam { user_id, team } => {
             room.set_team(user_id, team).await;
         }
+        #[cfg(not(feature = "disable-o2hook2-mod"))]
         RoomCommand::SetModifier {
+            user_id,
             modifier,
             value,
         } => {
-            room.set_modifier(modifier, value).await;
+            room.set_modifier(user_id, modifier, value).await;
         }
-        RoomCommand::SetAllModifiers { modifiers } => {
-            room.set_all_modifiers(modifiers).await;
+        #[cfg(not(feature = "disable-o2hook2-mod"))]
+        RoomCommand::SetAllModifiers { user_id, modifiers } => {
+            room.set_all_modifiers(user_id, modifiers).await;
         }
         RoomCommand::StartGame { user_id } => {
             command.send(room.start_game(user_id).await);
         }
         RoomCommand::JoinRoom { user, password } => {
             command.send(room.add_user(&user, password).await);
-        },
+        }
         RoomCommand::LeaveRoom { user_id } => {
             command.send(room.remove_user(user_id).await);
-        },
+        }
         RoomCommand::LeaveGame { user_id } => {
             command.send(room.leave_game(user_id).await);
-        },
+        }
         RoomCommand::GameEvent { user_id, event } => {
             room.on_game_event(user_id, event).await;
-        },
+        }
         RoomCommand::ConfirmGameLoaded { user_id } => {
             room.confirm_game_loaded(user_id);
-        },
-        RoomCommand::SubmitScore { user_id, score_request } => {
+        }
+        RoomCommand::SubmitScore {
+            user_id,
+            score_request,
+        } => {
             command.send(room.on_game_score_submit(user_id, score_request).await);
-        },
+        }
         RoomCommand::Chat { user_id, message } => {
             room.chat(user_id, &message).await;
-        },
+        }
+        RoomCommand::ToggleSlot { user_id, slot } => {
+            room.toggle_slot(user_id, slot).await;
+        }
+        RoomCommand::SetMusicState { user_id, state } => {
+            room.set_music_state(user_id, state).await;
+        }
     }
 }
 

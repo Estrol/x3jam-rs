@@ -1,41 +1,43 @@
 pub mod channel;
+pub mod commandline;
+pub mod config;
+pub mod database;
 pub mod gateway;
-pub mod user;
-pub mod web;
+pub mod itemlist;
 pub mod room;
+pub mod user;
+pub mod util;
+pub mod web;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     print_logo();
 
-    let token = tokio_util::sync::CancellationToken::new();
+    console_subscriber::init();
+    commandline::init();
+    config::init();
 
-    let handle = tokio::spawn({
-        let token = token.clone();
+    crate::database::init().await;
+    crate::itemlist::init().await;
 
-        #[allow(unused_must_use)]
+    let main_token = tokio_util::sync::CancellationToken::new();
+
+    let main_task = util::spawn_named("Main Task", {
+        let main_token = main_token.clone();
         async move {
-            let mut channels = Vec::new();
-            for i in 0..2 {
-                let Ok(handle) = channel::make_channel(token.clone(), 0, i, 1000, "OJNList.dat").await else {
-                    println!("Failed to create channel {}: {}", 0, i);
-                    continue;
-                };
-
-                channels.push(handle);
-            }
-
-            tokio::join!(
-                gateway::run(token.clone(), channels),
-                web::run(token.clone())
+            let _ = tokio::join!(
+                crate::web::run(main_token.clone()),
+                crate::gateway::run(main_token.clone())
             );
         }
     });
 
-    tokio::signal::ctrl_c().await?;
-    token.cancel();
+    tokio::signal::ctrl_c()
+        .await
+        .expect("Failed to listen for Ctrl+C");
 
-    handle.await.expect("Failed to join server tasks");
+    main_token.cancel();
+    main_task.await.expect("Failed to wait for main task");
 
     Ok(())
 }

@@ -6,7 +6,7 @@ pub mod routes;
 pub mod stateful;
 
 pub mod client;
-pub mod itemlist;
+// pub mod itemlist;
 
 use std::sync::{Arc, OnceLock};
 
@@ -33,151 +33,6 @@ pub fn is_http_request(data: &[u8]) -> bool {
     false
 }
 
-static DATABASE: OnceLock<database::GameDatabase> = OnceLock::new();
-
-pub async fn setup_database() {
-    let db = database::GameDatabase::from_mysql("localhost:3306", "root", "", "otwotest").await;
-
-    #[cfg(debug_assertions)]
-    {
-        if db.get_user_by_name("testuser").await.is_none() {
-            let hash =
-                bcrypt::hash("password", bcrypt::DEFAULT_COST).expect("Failed to hash password");
-
-            db.create_user(
-                "testuser",
-                &hash,
-                "TestUser",
-                database::CharacterGender::Male,
-            )
-            .await
-            .expect("Failed to create debug user");
-        }
-
-        if db.get_user_by_name("testuser2").await.is_none() {
-            let hash =
-                bcrypt::hash("password", bcrypt::DEFAULT_COST).expect("Failed to hash password");
-
-            db.create_user(
-                "testuser2",
-                &hash,
-                "TestUser2",
-                database::CharacterGender::Female,
-            )
-            .await
-            .expect("Failed to create debug user");
-        }
-
-        if db.get_user_by_name("testuser3").await.is_none() {
-            let hash =
-                bcrypt::hash("password", bcrypt::DEFAULT_COST).expect("Failed to hash password");
-
-            db.create_user(
-                "testuser3",
-                &hash,
-                "TestUser3",
-                database::CharacterGender::Male,
-            )
-            .await
-            .expect("Failed to create debug user");
-        }
-
-        if db.get_user_by_name("testuser4").await.is_none() {
-            let hash =
-                bcrypt::hash("password", bcrypt::DEFAULT_COST).expect("Failed to hash password");
-
-            db.create_user(
-                "testuser4",
-                &hash,
-                "TestUser4",
-                database::CharacterGender::Male,
-            )
-            .await
-            .expect("Failed to create debug user");
-        }
-
-        if db.get_user_by_name("testuser5").await.is_none() {
-            let hash =
-                bcrypt::hash("password", bcrypt::DEFAULT_COST).expect("Failed to hash password");
-
-            db.create_user(
-                "testuser5",
-                &hash,
-                "TestUser5",
-                database::CharacterGender::Male,
-            )
-            .await
-            .expect("Failed to create debug user");
-        }
-
-        if db.get_user_by_name("testuser6").await.is_none() {
-            let hash =
-                bcrypt::hash("password", bcrypt::DEFAULT_COST).expect("Failed to hash password");
-
-            db.create_user(
-                "testuser6",
-                &hash,
-                "TestUser6",
-                database::CharacterGender::Male,
-            )
-            .await
-            .expect("Failed to create debug user");
-        }
-
-        if db.get_user_by_name("testuser7").await.is_none() {
-            let hash =
-                bcrypt::hash("password", bcrypt::DEFAULT_COST).expect("Failed to hash password");
-
-            db.create_user(
-                "testuser7",
-                &hash,
-                "TestUser7",
-                database::CharacterGender::Male,
-            )
-            .await
-            .expect("Failed to create debug user");
-        }
-
-        if db.get_user_by_name("testuser8").await.is_none() {
-            let hash =
-                bcrypt::hash("password", bcrypt::DEFAULT_COST).expect("Failed to hash password");
-
-            db.create_user(
-                "testuser8",
-                &hash,
-                "TestUser8",
-                database::CharacterGender::Male,
-            )
-            .await
-            .expect("Failed to create debug user");
-        }
-    }
-
-    DATABASE.set(db).expect("Failed to set database");
-}
-
-#[allow(non_snake_case)]
-pub async fn GET_DATABASE() -> &'static database::GameDatabase {
-    DATABASE.get().expect("Database not initialized")
-}
-
-lazy_static::lazy_static! {
-    static ref ITEM_LIST: OnceLock<itemlist::ItemList> = OnceLock::new();
-}
-
-pub async fn setup_item_list() {
-    let list = itemlist::ItemList::load_from_file("itemlist.dat")
-        .await
-        .expect("Failed to load item list");
-
-    ITEM_LIST.set(list).expect("Failed to set item list");
-}
-
-#[allow(non_snake_case)]
-pub fn GET_ITEM_LIST() -> &'static itemlist::ItemList {
-    ITEM_LIST.get().expect("Item list not initialized")
-}
-
 lazy_static::lazy_static! {
     static ref CHANNELS: OnceLock<Vec<ChannelHandle>> = OnceLock::new();
 }
@@ -188,6 +43,14 @@ pub fn GET_CHANNELS() -> &'static Vec<ChannelHandle> {
 }
 
 pub fn setup_channels(channels: Vec<ChannelHandle>) {
+    for channel in &channels {
+        println!(
+            "Starting channel {} with max users {}",
+            channel.id(),
+            channel.max_users()
+        );
+    }
+
     CHANNELS.set(channels).expect("Failed to set channels");
 }
 
@@ -225,6 +88,8 @@ async fn process_guard(
     mut receiver: tokio::sync::mpsc::UnboundedReceiver<(EventId, Arc<dyn IEventData>)>,
 ) {
     'read_loop: loop {
+        println!("Client {} waiting for data...", client.id);
+
         tokio::select! {
             result = receiver.recv() => {
                 match result {
@@ -277,18 +142,76 @@ async fn process_guard(
 
 pub async fn run(
     token: tokio_util::sync::CancellationToken,
-    channels: Vec<ChannelHandle>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    println!("Starting gateway server on port 16010...");
+    let channels = (0..10)
+        .map(|i| {
+            let path = crate::config::get_str("CHANNELS", &format!("CH{}", i + 1), "");
+            if !path.is_empty() {
+                let split_path = path.split(',').collect::<Vec<_>>();
 
-    setup_database().await;
-    setup_item_list().await;
+                let path = split_path.get(0).unwrap_or(&"");
+                let _max_user = split_path
+                    .get(1)
+                    .and_then(|s| s.parse::<u32>().ok())
+                    .unwrap_or(120);
+
+                let path = format!("./resources/data/{}", path);
+
+                Some(crate::channel::make_channel(
+                    token.clone(),
+                    0,
+                    i,
+                    1000,
+                    path,
+                ))
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let channels = futures::future::join_all(channels.into_iter().filter_map(|x| x))
+        .await
+        .into_iter()
+        .filter_map(|x| x.ok())
+        .collect::<Vec<_>>();
+
     setup_channels(channels);
 
-    let server = Server::<Client>::new(tcpserver::AddressType::Any, 16010).await?;
-    server.run(token, tcpserver::pin!(process)).await?;
+    let port = crate::config::get::<u32>("GATEWAY", "GamePort", 16010);
 
-    println!("Gateway server has shut down.");
+    println!("Starting gateway server on 0.0.0.0:{}", port);
+
+    let server = Server::<Client>::new(tcpserver::AddressType::Any, port as u16).await?;
+
+    // Heartbeat task to send heartbeat messages to all channels every 5 seconds
+    let task = crate::util::spawn_named("Heartbeat Task", {
+        let token = token.clone();
+        async move {
+            loop {
+                if token.is_cancelled() {
+                    break;
+                }
+
+                for channel in GET_CHANNELS().iter() {
+                    channel
+                        .send::<()>(ChannelCommand::Heartbeat)
+                        .await
+                        .expect("Failed to send heartbeat");
+                }
+
+                tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+            }
+        }
+    });
+
+    futures::future::select(
+        server.run(token.clone(), tcpserver::pin!(process)).boxed(),
+        task.boxed(),
+    )
+    .await;
+
+    println!("Gateway server is shutting down...");
 
     Ok(())
 }

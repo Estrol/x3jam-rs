@@ -1,11 +1,13 @@
 use database::Equipment;
 
 use crate::{
-    room::{
-        ModifierReport, Modifiers, MusicId, MusicIdEntry, RoomArena, RoomDifficulty, RoomSpeed,
-        SkillId, TeamId,
+    gateway::{
+        commands::EventId,
+        routes::{listroom::PositionStatus, room::GameStartResult},
     },
-    gateway::{commands::EventId, routes::room::GameStartResult},
+    room::{
+        ModifierReport, Modifiers, MusicId, RoomArena, RoomDifficulty, RoomSpeed, SkillId, TeamId,
+    },
 };
 
 #[derive(gateway_derive::Event, encoder::StructSerializer)]
@@ -17,7 +19,7 @@ pub struct RoomOnPlayerEnterEventArgs {
     pub team: TeamId,
     pub unk1: u16,
     pub equipment: Equipment,
-    pub music_list: Vec<MusicIdEntry>,
+    pub music_list: Vec<MusicId>,
 }
 
 #[gateway_derive::event(EventId::RoomOnPlayerEnter)]
@@ -160,6 +162,7 @@ pub struct RoomOnModifierChangedEventArgs {
     pub value: u32,
 }
 
+#[cfg(not(feature = "disable-o2hook2-mod"))]
 #[gateway_derive::event(EventId::RoomOnModifierChanged)]
 async fn on_room_modifier_changed(
     client: &mut super::Client,
@@ -176,6 +179,7 @@ pub struct RoomOnAllModifiersChangedEventArgs {
     pub modifiers: ModifierReport,
 }
 
+#[cfg(not(feature = "disable-o2hook2-mod"))]
 #[gateway_derive::event(EventId::RoomOnAllModifiersChanged)]
 async fn on_room_all_modifiers_changed(
     client: &mut super::Client,
@@ -185,4 +189,45 @@ async fn on_room_all_modifiers_changed(
         .send_packet(EventId::RoomOnAllModifiersChanged, data)
         .await
         .expect("Failed to send set all room modifiers response");
+}
+
+#[derive(gateway_derive::Event, encoder::StructSerializer)]
+pub struct RoomOnSlotChangedEventArgs {
+    pub slot: u8,
+    pub status: PositionStatus,
+}
+
+#[gateway_derive::event(EventId::RoomOnSlotChanged)]
+async fn on_room_slot_changed(client: &mut super::Client, data: &RoomOnSlotChangedEventArgs) {
+    client
+        .send_packet(EventId::RoomOnSlotChanged, data)
+        .await
+        .expect("Failed to send set room slot response");
+}
+
+#[repr(u8)]
+#[derive(
+    encoder::StructDeserializer, encoder::StructSerializer, Clone, Copy, Debug, PartialEq, Eq,
+)]
+pub enum PlayingState {
+    None = 0,
+    Playing = 1,
+    Waiting = 2,
+}
+
+#[derive(gateway_derive::Event, encoder::StructSerializer)]
+pub struct RoomOnMusicStateChangedEventArgs {
+    pub slot: u8,
+    pub state: PlayingState,
+}
+
+#[gateway_derive::event(EventId::RoomOnMusicStateChanged)]
+async fn on_room_music_state_changed(
+    client: &mut super::Client,
+    data: &RoomOnMusicStateChangedEventArgs,
+) {
+    client
+        .send_packet(EventId::RoomOnMusicStateChanged, data)
+        .await
+        .expect("Failed to send set room music state response");
 }

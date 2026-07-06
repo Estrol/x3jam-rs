@@ -44,6 +44,18 @@ struct EnterChannelResponse {
 
 #[gateway_derive::route(RequestId::PlanetEnterChannel)]
 async fn handle_enter_channel(client: &mut super::Client, request: &EnterChannelRequest) {
+    if !client.version_checked {
+        let version_error_msg: &std::ffi::CStr =
+            c"You need use latest O2Hook2.dll to able login this server";
+
+        client
+            .send_packet(0xABCE as u16, &version_error_msg)
+            .await
+            .expect("Failed to send re-auth completion packet");
+
+        return;
+    }
+
     let channels = crate::gateway::GET_CHANNELS();
 
     for handle in channels.iter() {

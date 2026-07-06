@@ -1,23 +1,35 @@
 use std::{
-    collections::HashMap, sync::{Arc, atomic::AtomicUsize}, time::Duration,
+    collections::HashMap,
+    sync::{Arc, atomic::AtomicUsize},
+    time::Duration,
 };
 
 use crate::{
-    channel::{
-        ChannelWeakHandle, ojnlist::Header, user_repository::UserRepository,
-    }, gateway::{
-        commands::EventId, events::listroom::{ListRoomAddRoomEventArgs, ListRoomChangeRoomMaxPlayerEventArgs, ListRoomChatEventArgs, ListRoomRemoveRoomEventArgs}, routes::{listroom::{
-            JoinErrorCode, JoinRoomResponse, RoomEntry,
-            ServerMusicEntry, UserInfoEntry,
-        }, room::CreateRoomResult},
-    }, room::{ModifierReport, RoomCommand, RoomHandle, RoomMode, RoomStatus, RoomWeakHandle}, user::User,
+    channel::{ChannelWeakHandle, ojnlist::Header, user_repository::UserRepository},
+    gateway::{
+        commands::EventId,
+        events::listroom::{
+            ListRoomAddRoomEventArgs, ListRoomChangeRoomMaxPlayerEventArgs, ListRoomChatEventArgs,
+            ListRoomRemoveRoomEventArgs,
+        },
+        routes::{
+            listroom::{
+                JoinErrorCode, JoinRoomResponse, RoomEntry, ServerMusicEntry, UserInfoEntry,
+            },
+            room::CreateRoomResult,
+        },
+    },
+    room::{ModifierReport, RoomCommand, RoomHandle, RoomMode, RoomStatus, RoomWeakHandle},
+    user::User,
 };
 
-pub const INVALID_ROOM_ID: u32 = 0;
+pub const INVALID_ROOM_ID: u32 = u32::MAX;
 pub const MAX_ROOM_ID: u32 = 120;
 
 pub struct Room {
     pub handle: RoomHandle,
+    pub heartbeat_failures: u32,
+
     pub token: tokio_util::sync::CancellationToken,
 }
 
@@ -54,6 +66,53 @@ impl Channel {
         )
     }
 
+    pub async fn heartbeat(&mut self) {
+        let futures = self.rooms.iter_mut().map(|(_, room)| async move {
+            if room
+                .handle
+                .send_timed::<()>(RoomCommand::Heartbeat, Duration::from_secs(5))
+                .await
+                .is_err()
+            {
+                room.heartbeat_failures += 1;
+            }
+        });
+
+        futures::future::join_all(futures).await;
+
+        let failed_rooms: Vec<u32> = self
+            .rooms
+            .iter()
+            .filter(|(_, room)| room.heartbeat_failures >= 3)
+            .map(|(&room_id, _)| room_id)
+            .collect();
+
+        for room_id in failed_rooms {
+            if let Some(room) = self.rooms.remove(&room_id) {
+                room.token.cancel();
+                room.handle
+                    .join_handle
+                    .await
+                    .expect("Room task should finish");
+
+                self.users.broadcast(
+                    EventId::ListRoomOnRemoveRoom,
+                    ListRoomRemoveRoomEventArgs { id: room_id },
+                    None,
+                );
+            }
+        }
+    }
+
+    pub fn find_empty_room_id(&self) -> Option<u32> {
+        for room_id in 0..MAX_ROOM_ID {
+            if !self.rooms.contains_key(&room_id) {
+                return Some(room_id);
+            }
+        }
+        None
+    }
+
     pub async fn connect(&mut self, user: &User) -> bool {
         self.users.add(user)
     }
@@ -63,7 +122,7 @@ impl Channel {
             let Some(user_entry) = self.users.get_mut(user) else {
                 return false;
             };
-            
+
             (user_entry.user.id, user_entry.is_in_room())
         };
 
@@ -105,7 +164,11 @@ impl Channel {
             room.id = i;
 
             if let Some(handle) = self.rooms.get(&i) {
-                if let Ok(data) = handle.handle.send_timed::<RoomEntry>(RoomCommand::GetEntryInfo, Duration::from_secs(5)).await {
+                if let Ok(data) = handle
+                    .handle
+                    .send_timed::<RoomEntry>(RoomCommand::GetEntryInfo, Duration::from_secs(5))
+                    .await
+                {
                     room = data;
                 } else {
                     room.state = RoomStatus::Playing;
@@ -119,15 +182,6 @@ impl Channel {
         futures::future::join_all(futures).await
     }
 
-    pub fn find_empty_room_id(&self) -> Option<u32> {
-        for room_id in 0..MAX_ROOM_ID {
-            if !self.rooms.contains_key(&room_id) {
-                return Some(room_id);
-            }
-        }
-        None
-    }
-
     pub async fn create_room(
         &mut self,
         channel_handle: &ChannelWeakHandle,
@@ -137,7 +191,7 @@ impl Channel {
         mode: RoomMode,
         min_level: u8,
         max_level: u8,
-    ) -> (CreateRoomResult, Option<RoomWeakHandle>) {
+    ) -> (CreateRoomResult, Option<(RoomWeakHandle, ModifierReport)>) {
         let Some(room_id) = self.find_empty_room_id() else {
             return (CreateRoomResult::Full, None);
         };
@@ -145,7 +199,7 @@ impl Channel {
         let title_cloned = title.clone();
         let has_password = password.is_some();
 
-        let handle = {
+        let (handle, modifer) = {
             let Some(user_entry) = self.users.get_mut(user_id) else {
                 return (CreateRoomResult::Full, None);
             };
@@ -156,7 +210,7 @@ impl Channel {
 
             let token = tokio_util::sync::CancellationToken::new();
 
-            let Ok(room) = crate::room::make_room(
+            let Ok((room, modifier)) = crate::room::make_room(
                 &user_entry.user,
                 channel_handle.clone(),
                 token.clone(),
@@ -166,16 +220,25 @@ impl Channel {
                 mode,
                 min_level,
                 max_level,
-            ).await else {
+            )
+            .await
+            else {
                 return (CreateRoomResult::Full, None);
             };
 
             let weak = room.make_weak();
 
             user_entry.room_id = room_id;
-            self.rooms.insert(room_id, Room { handle: room, token });
+            self.rooms.insert(
+                room_id,
+                Room {
+                    handle: room,
+                    token,
+                    heartbeat_failures: 0,
+                },
+            );
 
-            weak
+            (weak, modifier)
         };
 
         self.users.broadcast(
@@ -196,14 +259,14 @@ impl Channel {
             EventId::ListRoomOnRoomPlayerCountChanged,
             ListRoomChangeRoomMaxPlayerEventArgs {
                 id: handle.id,
-                max_player: 8 as u8, // By default it's 8
+                max_player: 8 as u8,     // By default it's 8
                 current_player: 1 as u8, // The creator is the first player
                 premium: 0,
             },
-            None
+            None,
         );
 
-        (CreateRoomResult::Success, Some(handle))
+        (CreateRoomResult::Success, Some((handle, modifer)))
     }
 
     pub async fn join_room(
@@ -220,7 +283,14 @@ impl Channel {
             return (JoinRoomResponse::user_not_found(), None);
         };
 
-        let Ok(result) = room.handle.send::<(JoinRoomResponse, Option<ModifierReport>)>(RoomCommand::JoinRoom { user: user.user.clone(), password }).await else {
+        let Ok(result) = room
+            .handle
+            .send::<(JoinRoomResponse, Option<ModifierReport>)>(RoomCommand::JoinRoom {
+                user: user.user.clone(),
+                password,
+            })
+            .await
+        else {
             return (JoinRoomResponse::room_full(), None);
         };
 
@@ -228,7 +298,10 @@ impl Channel {
             user.room_id = room_id;
         }
 
-        (result.0, result.1.map(|modifier| (room.handle.make_weak(), modifier)))
+        (
+            result.0,
+            result.1.map(|modifier| (room.handle.make_weak(), modifier)),
+        )
     }
 
     pub async fn leave_room(&mut self, user_id: u64) -> bool {
@@ -237,7 +310,11 @@ impl Channel {
                 return false;
             };
 
-            let Ok(player_count) = room.handle.send::<Option<usize>>(RoomCommand::LeaveRoom { user_id: user.id }).await else {
+            let Ok(player_count) = room
+                .handle
+                .send::<Option<usize>>(RoomCommand::LeaveRoom { user_id: user.id })
+                .await
+            else {
                 return false;
             };
 
@@ -249,18 +326,17 @@ impl Channel {
         };
 
         if player_count == 0 {
-            let room = self.rooms.remove(&room_id)
-                .expect("Room should exist");
+            let room = self.rooms.remove(&room_id).expect("Room should exist");
 
             room.token.cancel();
-            room.handle.join_handle.await
+            room.handle
+                .join_handle
+                .await
                 .expect("Room task should finish");
 
             self.users.broadcast(
                 EventId::ListRoomOnRemoveRoom,
-                ListRoomRemoveRoomEventArgs {
-                    id: room_id,
-                },
+                ListRoomRemoveRoomEventArgs { id: room_id },
                 None,
             );
         }
@@ -322,7 +398,8 @@ impl Channel {
             room.token.cancel();
         }
 
-        let disconnect_futures = self.rooms
+        let disconnect_futures = self
+            .rooms
             .iter_mut()
             .map(|(_, room)| &mut room.handle.join_handle)
             .collect::<Vec<_>>();

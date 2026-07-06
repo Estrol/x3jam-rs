@@ -2,11 +2,7 @@ use std::io;
 use tokio::fs::File;
 use tokio::io::{AsyncRead, AsyncReadExt as _, BufReader};
 
-pub mod game_modifier;
-pub mod item_gender;
-
-pub use game_modifier::{GameModifier, GameModifierType};
-pub use item_gender::ItemGender;
+pub use super::{GameModifier, GameModifierType, ItemGender};
 
 #[derive(Debug)]
 pub struct Item {

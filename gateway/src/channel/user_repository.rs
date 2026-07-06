@@ -76,7 +76,7 @@ impl UserRepository {
         &mut self,
         id: EventId,
         event: Arc<dyn IEventData>,
-        exception: Option<u64>
+        exception: Option<u64>,
     ) {
         for user in &self.users {
             if user.room_id != INVALID_ROOM_ID {

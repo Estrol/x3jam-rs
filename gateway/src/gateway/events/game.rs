@@ -1,6 +1,5 @@
 use crate::{gateway::commands::EventId, room::GameEventType};
 
-
 #[derive(gateway_derive::Event, encoder::StructSerializer, Debug)]
 pub struct GameOnNoteEventEventArgs {
     pub slot: u8,

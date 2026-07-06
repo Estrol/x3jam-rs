@@ -1,10 +1,11 @@
 pub mod connection;
+pub mod game;
 pub mod gateway;
 pub mod listroom;
+pub mod myroom;
 pub mod planet;
 pub mod room;
-pub mod game;
-// pub mod shop;
+pub mod shop;
 
 use std::io::{Cursor, Read};
 
@@ -135,7 +136,19 @@ pub async fn handle_request(client: &mut super::Client) {
                     );
 
                     match get_route(packet.id) {
-                        Some(route) => (route.handler)(client, packet).await,
+                        Some(route) => {
+                            let handler = route.handler;
+                            let timeout = tokio::time::Duration::from_secs(5);
+
+                            tokio::time::timeout(timeout, handler(client, packet))
+                                .await
+                                .unwrap_or_else(|_| {
+                                    println!(
+                                        "Handler for packet ID={:?} timed out for client={:?}",
+                                        packet.id, client.id
+                                    );
+                                });
+                        }
                         _ => println!("Received unhandled packet: ID={:?}", packet.id),
                     }
                 }

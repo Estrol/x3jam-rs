@@ -1,4 +1,7 @@
-use crate::{gateway::commands::ResponseId, room::{GameEventType, RoomCommand}};
+use crate::{
+    gateway::commands::ResponseId,
+    room::{GameEventType, RoomCommand},
+};
 
 #[derive(Clone, encoder::StructDeserializer)]
 pub struct ScoreSubmitRequest {
@@ -57,11 +60,14 @@ pub async fn handle_submit_score(client: &mut crate::gateway::Client, packet: &S
         println!("Received SubmitScore request but client is not in a room");
         return;
     };
-    
-    let Ok(result) = room.send::<ScoreSubmitResponse>(RoomCommand::SubmitScore {
-        user_id,
-        score_request: packet.clone(),
-    }).await else {
+
+    let Ok(result) = room
+        .send::<ScoreSubmitResponse>(RoomCommand::SubmitScore {
+            user_id,
+            score_request: packet.clone(),
+        })
+        .await
+    else {
         println!("Failed to send SubmitScore command to room");
         return;
     };
@@ -81,17 +87,21 @@ pub struct GameEventPingRequest {
 }
 
 #[gateway_derive::route(RequestId::GameNoteEvent)]
-pub async fn handle_game_on_note_event(client: &mut crate::gateway::Client, packet: &GameEventPingRequest) {
+pub async fn handle_game_on_note_event(
+    client: &mut crate::gateway::Client,
+    packet: &GameEventPingRequest,
+) {
     let Some((user_id, room)) = client.room() else {
         println!("Received GameOnNoteEvent request but client is not in a room");
         return;
     };
 
-    let _ = room.send::<()>(RoomCommand::GameEvent {
-        user_id,
-        event: packet.clone(),
-    })
-    .await;
+    let _ = room
+        .send::<()>(RoomCommand::GameEvent {
+            user_id,
+            event: packet.clone(),
+        })
+        .await;
 }
 
 #[gateway_derive::route(RequestId::GameConfirmLoaded)]
@@ -101,7 +111,8 @@ pub async fn handle_game_confirm_loaded(client: &mut crate::gateway::Client, _pa
         return;
     };
 
-    let _ = room.send::<()>(RoomCommand::ConfirmGameLoaded { user_id })
+    let _ = room
+        .send::<()>(RoomCommand::ConfirmGameLoaded { user_id })
         .await;
 }
 
@@ -112,8 +123,7 @@ pub async fn handle_game_leave(client: &mut crate::gateway::Client, _packet: &()
         return;
     };
 
-    let Ok(leaving_room) = room.send::<bool>(RoomCommand::LeaveGame { user_id })
-        .await else {
+    let Ok(leaving_room) = room.send::<bool>(RoomCommand::LeaveGame { user_id }).await else {
         println!("Failed to send leave game command to room");
         return;
     };

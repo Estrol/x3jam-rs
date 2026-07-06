@@ -19,7 +19,7 @@ pub enum RequestId {
     ListRoomGetCharacter = 0x07D0,  // Done
     ListRoomGetRoomList = 0x07D2,   // Done
     ListRoomSyncInfo = 0x13A4,      // Done
-    ListRoomGetPlayerList = 0x07E8, // Done
+    ListRoomGetClientList = 0x07E8, // Done
     ListRoomCreateRoom = 0x07D4,    // Done
     ListRoomLeaveRoom = 0x0BBD,     // Done
     ListRoomJoinRoom = 0x0BBA,      // Done
@@ -27,19 +27,20 @@ pub enum RequestId {
 
     ShopEnter = 0x138F,
     ShopLeave = 0x138E,
-    ShopItemBuy = 0x1397,
-    ShopBack = 0x1388,
+    ShopActionBuy = 0x1397,
+    ShopActionSync = 0x1388,
 
-    InventoryEquip = 0x138C,
+    EquipItem = 0x138C,
 
-    RoomSetArena = 0x0FA2,   // Done
-    RoomSetMusicId = 0x0FA0, // Done
-    RoomSetSkill = 0x0FB7,   // Done
-    RoomSetReady = 0x0FA8,   // Done
-    RoomSetTeam = 0x0FA4,    // Done
-    RoomChat = 0x0BC3,       // Done
-    RoomNameChange = 0x0BB8, // Done
-    RoomSlotToggle = 0x0BC0,
+    RoomSetArena = 0x0FA2,      // Done
+    RoomSetMusicId = 0x0FA0,    // Done
+    RoomSetSkill = 0x0FB7,      // Done
+    RoomSetReady = 0x0FA8,      // Done
+    RoomSetTeam = 0x0FA4,       // Done
+    RoomChat = 0x0BC3,          // Done
+    RoomNameChange = 0x0BB8,    // Done
+    RoomSlotToggle = 0x0BC0,    // Done
+    RoomSetMusicState = 0x0FB9, // Done
 
     GameStart = 0x0FAA,
     GameLeave = 0x0FB5,
@@ -48,8 +49,11 @@ pub enum RequestId {
     SubmitScore = 0x0FB0,
 
     // O2Hook2's Extensions
+    #[cfg(not(feature = "disable-o2hook2-mod"))]
     RequestVersion = 0xAAAB,
+    #[cfg(not(feature = "disable-o2hook2-mod"))]
     RoomSetModifier = 0xAAB0,
+    #[cfg(not(feature = "disable-o2hook2-mod"))]
     RoomSetAllModifiers = 0xAAB1,
 
     Unknown(u16),
@@ -74,7 +78,7 @@ impl RequestId {
                 0x07D2 => RequestId::ListRoomGetRoomList,
                 0x07D0 => RequestId::ListRoomGetCharacter,
                 0x13A4 => RequestId::ListRoomSyncInfo,
-                0x07E8 => RequestId::ListRoomGetPlayerList,
+                0x07E8 => RequestId::ListRoomGetClientList,
                 0x1771 => RequestId::GatewayPing,
                 0x07D4 => RequestId::ListRoomCreateRoom,
                 0x0BBD => RequestId::ListRoomLeaveRoom,
@@ -95,11 +99,14 @@ impl RequestId {
                 0x0BC3 => RequestId::RoomChat,
                 0x0BB8 => RequestId::RoomNameChange,
                 0x0BC0 => RequestId::RoomSlotToggle,
-                0x1397 => RequestId::ShopItemBuy,
-                0x1388 => RequestId::ShopBack,
-                0x138C => RequestId::InventoryEquip,
+                0x1397 => RequestId::ShopActionBuy,
+                0x1388 => RequestId::ShopActionSync,
+                0x138C => RequestId::EquipItem,
+                #[cfg(not(feature = "disable-o2hook2-mod"))]
                 0xAAAB => RequestId::RequestVersion,
+                #[cfg(not(feature = "disable-o2hook2-mod"))]
                 0xAAB0 => RequestId::RoomSetModifier,
+                #[cfg(not(feature = "disable-o2hook2-mod"))]
                 0xAAB1 => RequestId::RoomSetAllModifiers,
                 _ => RequestId::Unknown(id),
             },
