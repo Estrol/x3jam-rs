@@ -5,7 +5,7 @@ pub async fn run(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let port = crate::config::get::<u32>("CONFIG", "WebPort", 16000);
     let addr = format!("0.0.0.0:{}", port);
-    println!("Starting web server on {}...", addr);
+    log::info!("Starting web server on {}...", addr);
 
     let router = routes::register_routes().await;
 
@@ -14,7 +14,7 @@ pub async fn run(
     tokio::select! {
         _ = axum::serve(listener, router.into_make_service()) => {},
         _ = token.cancelled() => {
-            println!("Web server is shutting down...");
+            log::info!("Web server is shutting down...");
         }
     }
 

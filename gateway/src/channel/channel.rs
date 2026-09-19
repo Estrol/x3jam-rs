@@ -4,6 +4,8 @@ use std::{
     time::Duration,
 };
 
+use encoder::stringutil::CStrEx;
+
 use crate::{
     channel::{ChannelWeakHandle, ojnlist::Header, user_repository::UserRepository},
     gateway::{
@@ -90,10 +92,7 @@ impl Channel {
         for room_id in failed_rooms {
             if let Some(room) = self.rooms.remove(&room_id) {
                 room.token.cancel();
-                room.handle
-                    .join_handle
-                    .await
-                    .expect("Room task should finish");
+                room.handle.join_handle.abort(); // Abort the room task immediately
 
                 self.users.broadcast(
                     EventId::ListRoomOnRemoveRoom,
@@ -409,12 +408,12 @@ impl Channel {
         tokio::select! {
             _ = futures::future::join_all(disconnect_futures) => {},
             _ = timeout => {
-                println!("Timeout while waiting for rooms to shutdown");
+                log::info!("Timeout while waiting for rooms to shutdown");
             }
         }
     }
 }
 
-pub fn to_cstring(s: &str) -> std::ffi::CString {
-    std::ffi::CString::new(s).unwrap_or_else(|_| std::ffi::CString::new("").unwrap())
+pub fn to_cstring(s: &str) -> CStrEx {
+    CStrEx::from_string(s)
 }

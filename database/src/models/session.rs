@@ -6,6 +6,11 @@ pub struct Model {
     #[sea_orm(primary_key, auto_increment = true)]
     pub id: u32,
     pub user_id: u64,
+    pub token: String,
+    pub expiration: DateTimeWithTimeZone,
+    pub socket_id: Option<u32>,
+    pub channel_id: Option<u32>,
+    pub region: Option<u32>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -16,6 +21,12 @@ pub enum Relation {
         to = "super::user::Column::Id"
     )]
     User,
+}
+
+impl Related<super::user::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::User.def()
+    }
 }
 
 impl ActiveModelBehavior for ActiveModel {}

@@ -1,4 +1,5 @@
 pub mod channel;
+pub mod cli;
 pub mod commandline;
 pub mod config;
 pub mod database;
@@ -8,15 +9,20 @@ pub mod room;
 pub mod user;
 pub mod util;
 pub mod web;
+pub mod session;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    console_subscriber::init();
+
+    let (_console, mut input_rx) = log::init_console("> ").await;
     print_logo();
 
-    console_subscriber::init();
-    commandline::init();
-    config::init();
+    crate::commandline::init();
+    crate::config::init();
 
+    // These need to be init after these
+    // since it depends on the config being loaded first
     crate::database::init().await;
     crate::itemlist::init().await;
 
@@ -32,9 +38,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     });
 
-    tokio::signal::ctrl_c()
-        .await
-        .expect("Failed to listen for Ctrl+C");
+    loop {
+        match input_rx.recv().await {
+            Some(log::ReadEvent::Line(_data)) => {
+                if !cli::handle(_data).await {
+                    break;
+                }
+            }
+            Some(log::ReadEvent::Interrupted) | None => {
+                break;
+            }
+        }
+    }
 
     main_token.cancel();
     main_task.await.expect("Failed to wait for main task");
@@ -65,6 +80,6 @@ pub fn print_logo() {
         .read_to_string(&mut logo_string)
         .expect("Failed to decompress logo");
 
-    println!("{}", logo_string);
-    println!();
+    log::output!("{}", logo_string);
+    log::info!();
 }

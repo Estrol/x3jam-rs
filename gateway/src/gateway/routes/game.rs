@@ -57,7 +57,7 @@ pub struct ScoreSubmitResponse {
 #[gateway_derive::route(RequestId::SubmitScore)]
 pub async fn handle_submit_score(client: &mut crate::gateway::Client, packet: &ScoreSubmitRequest) {
     let Some((user_id, room)) = client.room() else {
-        println!("Received SubmitScore request but client is not in a room");
+        log::info!("Received SubmitScore request but client is not in a room");
         return;
     };
 
@@ -68,7 +68,7 @@ pub async fn handle_submit_score(client: &mut crate::gateway::Client, packet: &S
         })
         .await
     else {
-        println!("Failed to send SubmitScore command to room");
+        log::info!("Failed to send SubmitScore command to room");
         return;
     };
 
@@ -92,7 +92,7 @@ pub async fn handle_game_on_note_event(
     packet: &GameEventPingRequest,
 ) {
     let Some((user_id, room)) = client.room() else {
-        println!("Received GameOnNoteEvent request but client is not in a room");
+        log::info!("Received GameOnNoteEvent request but client is not in a room");
         return;
     };
 
@@ -107,7 +107,7 @@ pub async fn handle_game_on_note_event(
 #[gateway_derive::route(RequestId::GameConfirmLoaded)]
 pub async fn handle_game_confirm_loaded(client: &mut crate::gateway::Client, _packet: &()) {
     let Some((user_id, room)) = client.room() else {
-        println!("Received GameConfirmLoaded request but client is not in a room");
+        log::info!("Received GameConfirmLoaded request but client is not in a room");
         return;
     };
 
@@ -119,12 +119,12 @@ pub async fn handle_game_confirm_loaded(client: &mut crate::gateway::Client, _pa
 #[gateway_derive::route(RequestId::GameLeave)]
 pub async fn handle_game_leave(client: &mut crate::gateway::Client, _packet: &()) {
     let Some((user_id, room)) = client.room() else {
-        println!("Client is not in a room");
+        log::info!("Client is not in a room");
         return;
     };
 
     let Ok(leaving_room) = room.send::<bool>(RoomCommand::LeaveGame { user_id }).await else {
-        println!("Failed to send leave game command to room");
+        log::info!("Failed to send leave game command to room");
         return;
     };
 

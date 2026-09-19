@@ -1,23 +1,21 @@
 use axum::body::to_bytes;
-use axum::response::IntoResponse;
 
-pub async fn handle(
+macro_rules! make_response {
+    ($code:expr, $body:expr) => {{
+        use axum::response::{IntoResponse};
+
+        (
+            $code,
+            $body,
+        )
+            .into_response()
+    }};
+}
+
+pub async fn post(
     req: axum::http::Request<axum::body::Body>,
 ) -> impl axum::response::IntoResponse {
-    let (_parts, body) = req.into_parts();
-
-    let body_str = match to_bytes(body, usize::MAX).await {
-        Ok(bytes) => String::from_utf8_lossy(&bytes).to_string(),
-        Err(_) => "<Failed to read body>".to_string(),
-    };
-
-    // gameid=testuser&tid1=94
-    let query_params: std::collections::HashMap<String, String> =
-        url::form_urlencoded::parse(body_str.as_bytes())
-            .into_owned()
-            .collect();
-
-    dbg!(&query_params);
+    let query_params = super::parse_query_params!(req);
 
     match query_params.get("gameid") {
         Some(gameid) => {
@@ -44,15 +42,17 @@ pub async fn handle(
             }
 
             if items.is_empty() {
-                return (axum::http::StatusCode::BAD_REQUEST, "No items provided").into_response();
+                return make_response!(
+                    axum::http::StatusCode::BAD_REQUEST,
+                    "No items provided for payment"
+                );
             }
 
             let Some(user) = crate::database::get().get_user_by_name(gameid).await else {
-                return (
+                return make_response!(
                     axum::http::StatusCode::NOT_FOUND,
-                    format!("User {} not found", gameid),
-                )
-                    .into_response();
+                    format!("User {} not found", gameid)
+                );
             };
 
             let item_list = crate::itemlist::get();
@@ -82,17 +82,13 @@ pub async fn handle(
                 &serde_json::to_string(&my_data).unwrap_or_default(),
             );
 
-            axum::response::Html(html).into_response()
+            make_response!(axum::http::StatusCode::OK, axum::response::Html(html))
         }
-        None => (
-            axum::http::StatusCode::BAD_REQUEST,
-            "Missing gameid parameter",
-        )
-            .into_response(),
+        None => make_response!(axum::http::StatusCode::BAD_REQUEST, "Missing gameid parameter"),
     }
 }
 
-pub async fn payment(
+pub async fn post2(
     req: axum::http::Request<axum::body::Body>,
 ) -> impl axum::response::IntoResponse {
     let (_parts, body) = req.into_parts();
@@ -110,11 +106,10 @@ pub async fn payment(
             let database = crate::database::get();
 
             let Some(user) = database.get_user_by_name(&request.gameid).await else {
-                return (
+                return make_response!(
                     axum::http::StatusCode::NOT_FOUND,
-                    format!("User {} not found", request.gameid),
-                )
-                    .into_response();
+                    format!("User {} not found", request.gameid)
+                );
             };
 
             let item_list = crate::itemlist::get();
@@ -138,21 +133,25 @@ pub async fn payment(
 
                         inventory.push(new_item);
                     } else {
-                        println!("No empty slot available for user {}", user.nickname);
+                        log::info!("No empty slot available for user {}", user.nickname);
                     }
                 }
             }
 
             let _ = database.save_inventory(user.id, &inventory).await;
-            (axum::http::StatusCode::OK, "Payment processed successfully").into_response()
+
+            return make_response!(
+                axum::http::StatusCode::OK,
+                "Payment processed successfully"
+            );
         }
         Err(e) => {
-            println!("Failed to parse payment request: {}", e);
-            (
+            log::info!("Failed to parse payment request: {}", e);
+
+            return make_response!(
                 axum::http::StatusCode::BAD_REQUEST,
-                "Invalid payment request format",
-            )
-                .into_response()
+                "Invalid payment request format"
+            );
         }
     }
 }

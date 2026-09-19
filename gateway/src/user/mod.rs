@@ -26,39 +26,28 @@ pub struct User {
 }
 
 impl User {
-    pub async fn verify_credentials(username: &str, password: &str) -> Result<u64, UserError> {
-        let pool = crate::database::get();
+    pub async fn register(
+        username: &str,
+        password: &str,
+        nickname: &str,
+        email: &str,
+        gender: database::CharacterGender,
+    ) -> Result<bool, UserError> {
+        let db = crate::database::get();
 
-        let Some(user) = pool.get_user_authentication_info(username).await else {
-            return Err(UserError::InvalidCredentials);
-        };
-
-        if !bcrypt::verify(password, &user.password_hash).unwrap_or(false) {
-            return Err(UserError::InvalidCredentials);
+        if db.get_user_by_name(username).await.is_some() {
+            return Ok(false);
         }
 
-        Ok(user.id as u64)
-    }
+        let hash = bcrypt::hash(password, bcrypt::DEFAULT_COST)
+            .map_err(|e| UserError::Error(format!("Failed to hash password: {}", e)))?;
 
-    pub async fn try_create_session(
-        user_id: u64,
-    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-        let pool = crate::database::get();
-
-        pool.create_session(user_id).await.map_err(|e| e.into())
-    }
-
-    pub async fn delete_session(user_id: u64) {
-        let database = crate::database::get();
-
-        if let Err(e) = database.delete_session(user_id).await {
-            println!(
-                "[Error] Failed to delete session for user {}: {}",
-                user_id, e
-            );
+        if db.create_user(username, &hash, nickname, email, gender).await.is_none() {
+            return Ok(false);
         }
-    }
 
+        Ok(true)
+    }
     pub async fn request_user(id: u64, request_inventory: bool) -> Result<Self, UserError> {
         let pool = crate::database::get();
 
@@ -77,12 +66,17 @@ impl User {
 
         if request_inventory {
             let inventory = pool.get_inventory(user.id).await;
-            for (i, item) in inventory.into_iter().enumerate() {
-                if i >= user.inventory.len() {
-                    break;
+            for item in inventory {
+                if item.slot as usize >= user.inventory.len() {
+                    log::warn!(
+                        "Inventory slot {} out of bounds for user {}",
+                        item.slot,
+                        user.id
+                    );
+                    continue;
                 }
 
-                user.inventory[i] = ItemId {
+                user.inventory[item.slot as usize] = ItemId {
                     id: item.item_id,
                     amount: item.quantity,
                 };
@@ -124,11 +118,39 @@ impl User {
         let pool = crate::database::get();
 
         let Some(user) = pool.get_user_by_id(self.id).await else {
-            println!("Failed to sync user {}: not found in database", self.id);
+            log::info!("Failed to sync user {}: not found in database", self.id);
             return;
         };
 
+        let Some(equipment) = pool.get_equipment(self.id as u32).await else {
+            log::info!(
+                "Failed to sync user {}: equipment not found in database",
+                self.id
+            );
+            return;
+        };
+
+        let inventory = pool.get_inventory(self.id).await;
+        let mut inventory_array = [ItemId::default(); 30];
+        for item in inventory {
+            if item.slot as usize >= inventory_array.len() {
+                log::warn!(
+                    "Inventory slot {} out of bounds for user {}",
+                    item.slot,
+                    self.id
+                );
+                continue;
+            }
+
+            inventory_array[item.slot as usize] = ItemId {
+                id: item.item_id,
+                amount: item.quantity,
+            };
+        }
+
         self.info = user;
+        self.equipment = equipment;
+        self.inventory = inventory_array;
     }
 
     pub fn set_music_list(&mut self, music_list: Vec<MusicId>) {
@@ -231,6 +253,13 @@ impl User {
             15 => self.equipment.hair_accessory = item_id,
             _ => return None,
         };
+
+        log::info!(
+            "Swapped equipment in slot {}: old item {}, new item {}",
+            slot,
+            old_item,
+            item_id
+        );
 
         Some(old_item)
     }

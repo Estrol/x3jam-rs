@@ -130,11 +130,6 @@ pub async fn handle_request(client: &mut super::Client) {
         Some(mut packets) => {
             if packets.len() > 0 && client.begin().is_ok() {
                 for packet in packets.iter_mut() {
-                    println!(
-                        "Received packet: ID={:?} for client={:?}",
-                        packet.id, client.id
-                    );
-
                     match get_route(packet.id) {
                         Some(route) => {
                             let handler = route.handler;
@@ -143,13 +138,14 @@ pub async fn handle_request(client: &mut super::Client) {
                             tokio::time::timeout(timeout, handler(client, packet))
                                 .await
                                 .unwrap_or_else(|_| {
-                                    println!(
+                                    log::info!(
                                         "Handler for packet ID={:?} timed out for client={:?}",
-                                        packet.id, client.id
+                                        packet.id,
+                                        client.id
                                     );
                                 });
                         }
-                        _ => println!("Received unhandled packet: ID={:?}", packet.id),
+                        _ => log::info!("Received unhandled packet: ID={:?}", packet.id),
                     }
                 }
 
@@ -158,7 +154,7 @@ pub async fn handle_request(client: &mut super::Client) {
         }
 
         None => {
-            println!(
+            log::info!(
                 "Failed to process packets for client={:?}, possibly due to decryption failure",
                 client.id
             );

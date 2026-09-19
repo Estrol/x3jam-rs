@@ -31,7 +31,7 @@ pub async fn handle_event(client: &mut Client, event_id: EventId, data: Arc<dyn 
     if let Some(event) = get_event(event_id) {
         (event.handler)(client, &*data).await;
     } else {
-        println!("Received unhandled event: ID={:?}", event_id);
+        log::info!("Received unhandled event: ID={:?}", event_id);
     }
 
     client.end().await.expect("Failed to end event batch");

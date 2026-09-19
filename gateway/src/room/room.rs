@@ -1,9 +1,11 @@
+use std::cmp::Reverse;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::cmp::Reverse;
 
 #[cfg(not(feature = "disable-o2hook2-mod"))]
 use std::collections::HashMap;
+
+use encoder::stringutil::CStrEx;
 
 pub use super::arena::RoomArena;
 pub use super::difficulty::RoomDifficulty;
@@ -40,8 +42,7 @@ use crate::{
                 ListRoomChangeRoomSkillEventArgs, ListRoomChangeRoomStatusEventArgs,
             },
             room::{
-                RoomOnArenaChangedEventArgs,
-                RoomOnChatEventArgs, RoomOnGameStartEventArgs,
+                RoomOnArenaChangedEventArgs, RoomOnChatEventArgs, RoomOnGameStartEventArgs,
                 RoomOnMusicIdChangedEventArgs, RoomOnNameChangedEventArgs,
                 RoomOnPlayerEnterEventArgs, RoomOnPlayerLeaveEventArgs, RoomOnReadyEventArgs,
                 RoomOnSkillChangedEventArgs, RoomOnTeamChangedEventArgs,
@@ -56,7 +57,9 @@ use crate::{
 };
 
 #[cfg(not(feature = "disable-o2hook2-mod"))]
-use crate::gateway::events::room::{RoomOnAllModifiersChangedEventArgs, RoomOnModifierChangedEventArgs};
+use crate::gateway::events::room::{
+    RoomOnAllModifiersChangedEventArgs, RoomOnModifierChangedEventArgs,
+};
 
 #[derive(Debug, Clone, Default)]
 pub struct GameData {
@@ -309,7 +312,7 @@ impl Room {
                 .position(|p| matches!(p, UserSlot::Available));
 
             let Some(slot) = slot else {
-                println!("No available slots in room {}", self.id);
+                log::info!("No available slots in room {}", self.id);
                 return (JoinRoomResponse::room_full(), None);
             };
 
@@ -386,13 +389,15 @@ impl Room {
                 } => {
                     slot.status = PositionStatus::Occupied;
 
-                    let nickname = std::ffi::CString::new(user.nickname())
-                        .unwrap_or_else(|_| std::ffi::CString::new("InvalidNickname").unwrap());
+                    let nickname = to_cstring(&user.nickname());
 
                     let member_info = MemberInfo {
                         nickname,
                         level: user.level(),
-                        gender: 1,
+                        gender: match user.info.gender {
+                            database::CharacterGender::Female => 0,
+                            database::CharacterGender::Male => 1,
+                        },
                         is_room_master: *host,
                         color: *team,
                         ready: *ready,
@@ -413,7 +418,7 @@ impl Room {
             result: JoinErrorCode::Success,
             slot: slot_idex as u8,
             team: team,
-            name: std::ffi::CString::new(self.title.clone()).unwrap_or_default(),
+            name: to_cstring(&self.get_name_rate()),
             music_id: self.music_id,
             arena: self.arena,
             mode: self.mode,
@@ -487,20 +492,25 @@ impl Room {
                     None,
                 );
 
-                println!(
+                log::info!(
                     "User {} left room {} (slot {}), new host is slot {}",
-                    user, self.id, slot, host
+                    user,
+                    self.id,
+                    slot,
+                    host
                 );
             } else {
-                println!(
+                log::info!(
                     "User {} left room {} (slot {}), room is now empty",
-                    user, self.id, slot
+                    user,
+                    self.id,
+                    slot
                 );
             }
 
             Some(self.player_count())
         } else {
-            println!("User is not in room {}", self.id);
+            log::info!("User is not in room {}", self.id);
             None
         }
     }
@@ -627,7 +637,7 @@ impl Room {
 
     pub async fn set_name(&mut self, user_id: u64, name: &str) {
         if !self.is_host(user_id) {
-            println!("User {} is not the host of room {}", user_id, self.id);
+            log::info!("User {} is not the host of room {}", user_id, self.id);
             return;
         }
 
@@ -678,7 +688,7 @@ impl Room {
         speed: RoomSpeed,
     ) {
         if !self.is_host(user_id) {
-            println!("User {} is not the host of room {}", user_id, self.id); // Request forged?
+            log::info!("User {} is not the host of room {}", user_id, self.id); // Request forged?
             return;
         }
 
@@ -688,12 +698,12 @@ impl Room {
                 .send::<Option<Header>>(ChannelCommand::RequestOJNInfo { id: music_id })
                 .await
             else {
-                println!("Failed to fetch OJN info for music ID {}", music_id);
+                log::info!("Failed to fetch OJN info for music ID {}", music_id);
                 return;
             };
 
             let Some(header) = header else {
-                println!("OJN info not found for music ID {}", music_id);
+                log::info!("OJN info not found for music ID {}", music_id);
                 return;
             };
 
@@ -729,7 +739,7 @@ impl Room {
 
     pub fn set_arena(&mut self, user_id: u64, arena: RoomArena) {
         if !self.is_host(user_id) {
-            println!("User {} is not the host of room {}", user_id, self.id);
+            log::info!("User {} is not the host of room {}", user_id, self.id);
             return;
         }
 
@@ -747,7 +757,7 @@ impl Room {
 
     pub async fn set_skills(&mut self, user_id: u64, ring: Vec<SkillId>) {
         if !self.is_host(user_id) {
-            println!("User {} is not the host of room {}", user_id, self.id);
+            log::info!("User {} is not the host of room {}", user_id, self.id);
             return;
         }
 
@@ -756,6 +766,7 @@ impl Room {
         self.broadcast(
             EventId::RoomOnSkillChanged,
             RoomOnSkillChangedEventArgs {
+                success: true,
                 ring: self.skill_slot.clone(),
             },
             None,
@@ -901,7 +912,7 @@ impl Room {
                     && result.sln != sln
                     && result.nln != nln
                 {
-                    println!(
+                    log::info!(
                         "[Warn] User {} submitted score with mismatched modifiers: expected rate {}, fln {}, sln {}, nln {}, but got rate {}, fln {}, sln {}, nln {}",
                         user,
                         rate,
@@ -950,7 +961,7 @@ impl Room {
                 slot
             }
             _ => {
-                println!("[Warn] User {} is not in room {}", user, self.id);
+                log::info!("[Warn] User {} is not in room {}", user, self.id);
                 return ScoreSubmitResponse {
                     slot: u8::MAX, // Invalid slot to indicate error
                     success: false,
@@ -1148,7 +1159,7 @@ impl Room {
                     let user_clone = user.clone();
                     tokio::spawn(async move {
                         if let Err(e) = user_clone.save().await {
-                            println!("[Error] Failed to save user {}: {}", user_clone.id, e);
+                            log::info!("[Error] Failed to save user {}: {}", user_clone.id, e);
                         }
                     });
                 }
@@ -1162,7 +1173,7 @@ impl Room {
             tokio::spawn(async move {
                 let pool = crate::database::get();
                 if let Err(e) = pool.submit_scores(&scores_to_save).await {
-                    println!("[Error] Failed to save scores for room {}: {}", room_id, e);
+                    log::info!("[Error] Failed to save scores for room {}: {}", room_id, e);
                 }
             });
         }
@@ -1182,7 +1193,7 @@ impl Room {
                 None,
             );
         } else {
-            println!("User is not in room {}", self.id);
+            log::info!("User is not in room {}", self.id);
         }
     }
 
@@ -1225,7 +1236,7 @@ impl Room {
     #[cfg(not(feature = "disable-o2hook2-mod"))]
     pub async fn set_modifier(&mut self, user_id: u64, modifier: Modifiers, value: u32) {
         if !self.is_host(user_id) {
-            println!("User {} is not the host of room {}", user_id, self.id);
+            log::info!("User {} is not the host of room {}", user_id, self.id);
             return;
         }
 
@@ -1263,7 +1274,7 @@ impl Room {
     #[cfg(not(feature = "disable-o2hook2-mod"))]
     pub async fn set_all_modifiers(&mut self, user_id: u64, modifiers: ModifierReport) {
         if !self.is_host(user_id) {
-            println!("User {} is not the host of room {}", user_id, self.id);
+            log::info!("User {} is not the host of room {}", user_id, self.id);
             return;
         }
 
@@ -1297,7 +1308,7 @@ impl Room {
             if let Some((slot, UserSlot::User { user, .. })) = self.get_user_slot_mut(user) {
                 (slot, user.level())
             } else {
-                println!("User is not in room {}", self.id);
+                log::info!("User is not in room {}", self.id);
                 return false;
             };
 
@@ -1337,7 +1348,7 @@ impl Room {
         {
             to_cstring(&user.nickname())
         } else {
-            println!("User is not in room {}", self.id);
+            log::info!("User is not in room {}", self.id);
             return;
         };
 
@@ -1353,12 +1364,12 @@ impl Room {
 
     pub async fn toggle_slot(&mut self, user_id: u64, slot: usize) {
         if !self.is_host(user_id) {
-            println!("User {} is not the host of room {}", user_id, self.id);
+            log::info!("User {} is not the host of room {}", user_id, self.id);
             return;
         }
 
         if slot >= self.players.len() {
-            println!("Invalid slot index {} for room {}", slot, self.id);
+            log::info!("Invalid slot index {} for room {}", slot, self.id);
             return;
         }
 
@@ -1413,7 +1424,7 @@ impl Room {
 
     pub async fn set_music_state(&mut self, user: u64, state_: PlayingState) {
         let Some((slot, UserSlot::User { state, .. })) = self.get_user_slot_mut(user) else {
-            println!("User is not in room {}", self.id);
+            log::info!("User is not in room {}", self.id);
             return;
         };
 
@@ -1477,6 +1488,6 @@ pub fn gen_random_seed() -> u32 {
     u32::from_le_bytes(seed)
 }
 
-pub fn to_cstring(s: &str) -> std::ffi::CString {
-    std::ffi::CString::new(s).expect("Failed to convert string to CString")
+pub fn to_cstring(s: &str) -> CStrEx {
+    CStrEx::from_string(s)
 }

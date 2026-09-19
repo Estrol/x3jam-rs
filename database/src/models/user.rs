@@ -8,6 +8,9 @@ pub struct Model {
     pub name: String,
     pub password_hash: String,
     pub nickname: String,
+    pub email: String,
+    #[sea_orm(default = false)]
+    pub admin: bool,
     #[sea_orm(default = 0)]
     pub exp: u64,
     #[sea_orm(default = 0)]

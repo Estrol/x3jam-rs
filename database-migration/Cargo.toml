@@ -1,0 +1,11 @@
+[package]
+name = "database-migration"
+version = "1.0.0"
+edition = "2024"
+
+[dependencies]
+tokio = { version = "1.52.3", features = ["full"] }
+async-trait = "0.1.89"
+sea-orm-migration = { version = "1.1.20", features = ["sqlx-all", "runtime-tokio-native-tls"] }
+sea-orm = { version = "1.1.20", features = ["sqlx-all", "runtime-tokio-native-tls", "macros"] }
+ini = "1.3.0"

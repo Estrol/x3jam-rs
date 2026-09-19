@@ -21,7 +21,7 @@ pub async fn handle_inventory_equip(
     packet: &InventoryEquipRequest,
 ) {
     let Some((user_id, room)) = client.channel() else {
-        println!("Received InventoryEquip request but client is not in a channel");
+        log::info!("Received InventoryEquip request but client is not in a channel");
         return;
     };
 
@@ -33,7 +33,7 @@ pub async fn handle_inventory_equip(
         })
         .await
     else {
-        println!("Failed to send InventoryEquip command to channel");
+        log::info!("Failed to send InventoryEquip command to channel");
         return;
     };
 

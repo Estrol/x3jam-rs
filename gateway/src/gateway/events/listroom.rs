@@ -1,3 +1,5 @@
+use encoder::stringutil::CStrEx;
+
 use crate::{
     gateway::commands::EventId,
     room::{MusicId, RoomDifficulty, RoomMode, RoomSpeed, RoomStatus, SkillId},
@@ -5,8 +7,8 @@ use crate::{
 
 #[derive(gateway_derive::Event, encoder::StructSerializer)]
 pub struct ListRoomChatEventArgs {
-    pub author: std::ffi::CString,
-    pub message: std::ffi::CString,
+    pub author: CStrEx,
+    pub message: CStrEx,
 }
 
 #[gateway_derive::event(EventId::ListRoomOnChat)]
@@ -20,7 +22,7 @@ async fn on_chat(client: &mut super::Client, data: &ListRoomAddRoomEventArgs) {
 #[derive(Debug, gateway_derive::Event, encoder::StructSerializer)]
 pub struct ListRoomAddRoomEventArgs {
     pub id: u32,
-    pub title: std::ffi::CString,
+    pub title: CStrEx,
     pub mode: RoomMode,
     pub has_password: bool,
     pub min_level: u8,
@@ -88,7 +90,7 @@ async fn on_room_music_id_changed(
 #[derive(gateway_derive::Event, encoder::StructSerializer)]
 pub struct ListRoomChangeRoomNameEventArgs {
     pub id: u32,
-    pub name: std::ffi::CString,
+    pub name: CStrEx,
 }
 
 #[gateway_derive::event(EventId::ListRoomOnRoomNameChanged)]

@@ -1,6 +1,6 @@
-pub async fn handle() -> impl axum::response::IntoResponse {
+pub async fn get() -> impl axum::response::IntoResponse {
     #[allow(unused_mut)] // TODO: add format options to announcement.txt and use them here
-    let mut text = tokio::fs::read_to_string("./resources/announcement.txt")
+    let mut text = tokio::fs::read_to_string("./resources/web/announcement.txt")
         .await
         .unwrap_or_default();
 

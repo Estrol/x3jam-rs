@@ -6,5 +6,7 @@ members = [
     "encoder",
     "encoder-derive",
     "database",
+    "database-migration",
     "generate_ojnlist",
+    "log",
 ]

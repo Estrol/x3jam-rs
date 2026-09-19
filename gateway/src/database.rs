@@ -2,133 +2,66 @@ use std::sync::OnceLock;
 
 static DATABASE: OnceLock<database::GameDatabase> = OnceLock::new();
 
+fn parse_equipment_array(config_str: &str) -> [u32; 16] {
+    let mut arr = [0; 16];
+    for (i, val) in config_str
+        .split(',')
+        .filter_map(|s| s.trim().parse::<u32>().ok())
+        .take(16)
+        .enumerate()
+    {
+        arr[i] = val;
+    }
+    arr
+}
+
+fn parse_items(config_str: &str) -> Vec<(u32, u32)> {
+    config_str
+        .split('|')
+        .filter_map(|s| {
+            let clean_s = s.trim_matches(|c| c == '{' || c == '}');
+            let (id_str, count_str) = clean_s.split_once(',')?;
+
+            Some((id_str.parse().ok()?, count_str.parse().ok()?))
+        })
+        .collect()
+}
+
 pub async fn init() {
     let connection_string = super::config::get_str("DATABASE", "URL", "");
     if connection_string.is_empty() {
-        panic!("DATABASE URL is not set in the configuration");
+        panic!("Database connection string is empty. Please set DATABASE_URL in the config.");
     }
 
-    let migrate = super::commandline::contains("migrate");
+    log::info!("Connectin to database...");
 
-    // TODO: handle errors properly instead of panicking
-    let db = database::GameDatabase::new(&connection_string, migrate).await;
+    let mut db = database::GameDatabase::new(&connection_string).await;
 
-    #[cfg(debug_assertions)]
-    {
-        if db.get_user_by_name("testuser").await.is_none() {
-            let hash =
-                bcrypt::hash("password", bcrypt::DEFAULT_COST).expect("Failed to hash password");
+    db.set_default_mcash(super::config::get::<u32>("USER", "MCash", 0));
+    db.set_default_gold(super::config::get::<u32>("USER", "Gold", 0));
 
-            db.create_user(
-                "testuser",
-                &hash,
-                "TestUser",
-                database::CharacterGender::Male,
-            )
-            .await
-            .expect("Failed to create debug user");
-        }
+    let default_character_f = super::config::get_str("USER", "FCharacters", "");
+    let default_character_m = super::config::get_str("USER", "MCharacters", "");
 
-        if db.get_user_by_name("testuser2").await.is_none() {
-            let hash =
-                bcrypt::hash("password", bcrypt::DEFAULT_COST).expect("Failed to hash password");
+    db.set_default_equipment(
+        database::CharacterGender::Female,
+        parse_equipment_array(&default_character_f),
+    );
+    db.set_default_equipment(
+        database::CharacterGender::Male,
+        parse_equipment_array(&default_character_m),
+    );
 
-            db.create_user(
-                "testuser2",
-                &hash,
-                "TestUser2",
-                database::CharacterGender::Female,
-            )
-            .await
-            .expect("Failed to create debug user");
-        }
-
-        if db.get_user_by_name("testuser3").await.is_none() {
-            let hash =
-                bcrypt::hash("password", bcrypt::DEFAULT_COST).expect("Failed to hash password");
-
-            db.create_user(
-                "testuser3",
-                &hash,
-                "TestUser3",
-                database::CharacterGender::Male,
-            )
-            .await
-            .expect("Failed to create debug user");
-        }
-
-        if db.get_user_by_name("testuser4").await.is_none() {
-            let hash =
-                bcrypt::hash("password", bcrypt::DEFAULT_COST).expect("Failed to hash password");
-
-            db.create_user(
-                "testuser4",
-                &hash,
-                "TestUser4",
-                database::CharacterGender::Male,
-            )
-            .await
-            .expect("Failed to create debug user");
-        }
-
-        if db.get_user_by_name("testuser5").await.is_none() {
-            let hash =
-                bcrypt::hash("password", bcrypt::DEFAULT_COST).expect("Failed to hash password");
-
-            db.create_user(
-                "testuser5",
-                &hash,
-                "TestUser5",
-                database::CharacterGender::Male,
-            )
-            .await
-            .expect("Failed to create debug user");
-        }
-
-        if db.get_user_by_name("testuser6").await.is_none() {
-            let hash =
-                bcrypt::hash("password", bcrypt::DEFAULT_COST).expect("Failed to hash password");
-
-            db.create_user(
-                "testuser6",
-                &hash,
-                "TestUser6",
-                database::CharacterGender::Male,
-            )
-            .await
-            .expect("Failed to create debug user");
-        }
-
-        if db.get_user_by_name("testuser7").await.is_none() {
-            let hash =
-                bcrypt::hash("password", bcrypt::DEFAULT_COST).expect("Failed to hash password");
-
-            db.create_user(
-                "testuser7",
-                &hash,
-                "TestUser7",
-                database::CharacterGender::Male,
-            )
-            .await
-            .expect("Failed to create debug user");
-        }
-
-        if db.get_user_by_name("testuser8").await.is_none() {
-            let hash =
-                bcrypt::hash("password", bcrypt::DEFAULT_COST).expect("Failed to hash password");
-
-            db.create_user(
-                "testuser8",
-                &hash,
-                "TestUser8",
-                database::CharacterGender::Male,
-            )
-            .await
-            .expect("Failed to create debug user");
-        }
-    }
-
+    let default_items_str = super::config::get_str("USER", "Items", "");
+    db.set_default_items(parse_items(&default_items_str));
+    
     DATABASE.set(db).expect("Failed to set database");
+}
+
+pub async fn close() {
+    if let Some(db) = DATABASE.get() {
+        db.close().await;
+    }
 }
 
 pub fn get() -> &'static database::GameDatabase {

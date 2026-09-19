@@ -1,18 +1,17 @@
 use std::{collections::HashMap, sync::OnceLock};
 
-static DATABASE: OnceLock<HashMap<String, HashMap<String, Option<String>>>> = OnceLock::new();
+static CONFIG: OnceLock<HashMap<String, HashMap<String, Option<String>>>> = OnceLock::new();
 
 pub fn init() {
     let Ok(config) = ini::ini!(safe "./resources/config.ini") else {
-        println!("Failed to load configuration file");
-        return;
+        panic!("Failed to load configuration file: ./resources/config.ini");
     };
 
-    DATABASE.set(config).expect("Failed to set configuration");
+    CONFIG.set(config).expect("Failed to set configuration");
 }
 
 pub fn get_str(section: &str, key: &str, default: &str) -> String {
-    let config = DATABASE.get().expect("Configuration not initialized");
+    let config = CONFIG.get().expect("Configuration not initialized");
 
     let section_lower = section.to_lowercase();
     let key_lower = key.to_lowercase();
@@ -32,7 +31,7 @@ pub fn get<T: Copy>(section: &str, key: &str, default: T) -> T
 where
     T: std::str::FromStr,
 {
-    let config = DATABASE.get().expect("Configuration not initialized");
+    let config = CONFIG.get().expect("Configuration not initialized");
 
     let section_lower = section.to_lowercase();
     let key_lower = key.to_lowercase();

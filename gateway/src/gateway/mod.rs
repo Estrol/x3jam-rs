@@ -15,8 +15,7 @@ use tcpserver::{IClient, Server};
 
 use crate::{
     channel::{ChannelCommand, ChannelHandle},
-    gateway::{commands::EventId, events::IEventData},
-    user::User,
+    gateway::{commands::EventId, events::IEventData}
 };
 pub use client::Client;
 
@@ -43,14 +42,6 @@ pub fn GET_CHANNELS() -> &'static Vec<ChannelHandle> {
 }
 
 pub fn setup_channels(channels: Vec<ChannelHandle>) {
-    for channel in &channels {
-        println!(
-            "Starting channel {} with max users {}",
-            channel.id(),
-            channel.max_users()
-        );
-    }
-
     CHANNELS.set(channels).expect("Failed to set channels");
 }
 
@@ -65,7 +56,7 @@ async fn process(client: &mut Client) {
         .await
         .is_err()
     {
-        println!("Client {} panicked during processing", client.id);
+        log::info!("Client {} panicked during processing", client.id);
     }
 
     if let Some((_, channel)) = client.channel() {
@@ -76,10 +67,14 @@ async fn process(client: &mut Client) {
         }
     }
 
-    if client.session_entered
-        && let Some(user) = client.user()
-    {
-        User::delete_session(user.id).await;
+    if let Some(session) = client.session_mut() {
+        if !session.unbind_socket().await.unwrap_or(false) {
+            log::info!(
+                "Failed to unbind socket for session {} (user_id: {})",
+                session.token,
+                session.uid
+            );
+        }
     }
 }
 
@@ -88,8 +83,6 @@ async fn process_guard(
     mut receiver: tokio::sync::mpsc::UnboundedReceiver<(EventId, Arc<dyn IEventData>)>,
 ) {
     'read_loop: loop {
-        println!("Client {} waiting for data...", client.id);
-
         tokio::select! {
             result = receiver.recv() => {
                 match result {
@@ -98,7 +91,7 @@ async fn process_guard(
                     },
                     Some((id, event)) => events::handle_event(client, id, event).await,
                     _ => {
-                        println!("Sender dropped, shutting down client");
+                        log::info!("Sender dropped, shutting down client");
                         break 'read_loop;
                     }
                 }
@@ -107,7 +100,7 @@ async fn process_guard(
             result = client.read() => {
                 match result {
                     Ok(0) => {
-                        println!("Client disconnected");
+                        log::info!("Client disconnected");
                         break 'read_loop;
                     },
                     Ok(_) => {
@@ -117,7 +110,7 @@ async fn process_guard(
                             const HTTP_RICKROLL_REDIRECT: &[u8] = b"HTTP/1.1 301 Moved Permanently\r\nLocation: https://www.youtube.com/watch?v=dQw4w9WgXcQ\r\n\r\n";
 
                             if let Err(e) = client.send(HTTP_RICKROLL_REDIRECT).await {
-                                println!("[Error] Failed to send HTTP response: {}", e);
+                                log::info!("[Error] Failed to send HTTP response: {}", e);
                             }
 
                             break 'read_loop;
@@ -131,7 +124,7 @@ async fn process_guard(
                         routes::handle_request(client).await;
                     },
                     Err(e) => {
-                        println!("[Error] Failed to read from client: {}", e);
+                        log::info!("[Error] Failed to read from client: {}", e);
                         break 'read_loop;
                     },
                 }
@@ -176,11 +169,13 @@ pub async fn run(
         .filter_map(|x| x.ok())
         .collect::<Vec<_>>();
 
+    let (channels, handles): (Vec<_>, Vec<_>) = channels.into_iter().unzip();
+
     setup_channels(channels);
 
     let port = crate::config::get::<u32>("GATEWAY", "GamePort", 16010);
 
-    println!("Starting gateway server on 0.0.0.0:{}", port);
+    log::info!("Starting gateway server on 0.0.0.0:{}", port);
 
     let server = Server::<Client>::new(tcpserver::AddressType::Any, port as u16).await?;
 
@@ -193,11 +188,31 @@ pub async fn run(
                     break;
                 }
 
-                for channel in GET_CHANNELS().iter() {
-                    channel
-                        .send::<()>(ChannelCommand::Heartbeat)
-                        .await
-                        .expect("Failed to send heartbeat");
+                let sends = GET_CHANNELS().iter().map(|channel| {
+                    let id = channel.id();
+                    let region = channel.region();
+
+                    async move {
+                        let result = tokio::time::timeout(
+                            tokio::time::Duration::from_secs(5),
+                            channel.send::<()>(ChannelCommand::Heartbeat),
+                        )
+                        .await;
+
+                        (id, region, result)
+                    }
+                });
+
+                for (id, region, result) in futures::future::join_all(sends).await {
+                    match result {
+                        Ok(Ok(())) => {}
+                        Ok(Err(e)) => {
+                            log::info!("Heartbeat to channel {} ({}) failed: {}", id, region, e);
+                        }
+                        Err(_) => {
+                            log::info!("Heartbeat to channel {} ({}) timed out", id, region);
+                        }
+                    }
                 }
 
                 tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
@@ -205,13 +220,17 @@ pub async fn run(
         }
     });
 
-    futures::future::select(
-        server.run(token.clone(), tcpserver::pin!(process)).boxed(),
-        task.boxed(),
-    )
-    .await;
+    // wait all
+    #[allow(unused)]
+    {
+        tokio::join!(
+            server.run(token.clone(), tcpserver::pin!(process)),
+            task,
+            futures::future::join_all(handles),
+        );
+    }
 
-    println!("Gateway server is shutting down...");
+    log::info!("Gateway server is shutting down...");
 
     Ok(())
 }

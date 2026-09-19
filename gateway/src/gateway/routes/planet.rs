@@ -61,7 +61,7 @@ async fn handle_enter_channel(client: &mut super::Client, request: &EnterChannel
     for handle in channels.iter() {
         if handle.region() == request.server_id as u32 && handle.id() == request.channel_id as u32 {
             let Some(user) = client.user() else {
-                println!("Client is not logged in");
+                log::info!("Client is not logged in");
                 return;
             };
 
@@ -69,7 +69,7 @@ async fn handle_enter_channel(client: &mut super::Client, request: &EnterChannel
                 .send(ChannelCommand::Connect { user: user.clone() })
                 .await
             else {
-                println!("Failed to send connect command to channel");
+                log::info!("Failed to send connect command to channel");
                 return;
             };
 
@@ -85,7 +85,7 @@ async fn handle_enter_channel(client: &mut super::Client, request: &EnterChannel
                 .await
                 .expect("Failed to send enter channel response");
 
-            return;
+            break;
         }
     }
 }
@@ -93,7 +93,7 @@ async fn handle_enter_channel(client: &mut super::Client, request: &EnterChannel
 #[gateway_derive::route(RequestId::PlanetLeaveChannel)]
 async fn handle_leave_channel(client: &mut super::Client, _packet: &()) {
     let Some((user_id, ch)) = client.channel() else {
-        println!("Client is not in a channel");
+        log::info!("Client is not in a channel");
         return;
     };
 
@@ -101,7 +101,7 @@ async fn handle_leave_channel(client: &mut super::Client, _packet: &()) {
         .send::<bool>(ChannelCommand::Disconnect { user_id })
         .await
     else {
-        println!("Failed to send disconnect command to channel");
+        log::info!("Failed to send disconnect command to channel");
         return;
     };
 

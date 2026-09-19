@@ -7,7 +7,7 @@ pub fn main() {
     }
 
     if std::mem::size_of::<Header>() != 300 {
-        eprintln!("Header size is not 300 bytes, please check the Header struct definition.");
+        println!("Header size is not 300 bytes, please check the Header struct definition.");
         std::process::exit(1);
     }
 
@@ -19,7 +19,7 @@ pub fn main() {
     let output_index = args.iter().position(|x| x == "--output");
 
     if path_index.is_none() || output_index.is_none() {
-        eprintln!("Usage: generate_ojnlist --path <path> --output <output>");
+        println!("Usage: generate_ojnlist --path <path> --output <output>");
         std::process::exit(1);
     }
 
@@ -69,16 +69,80 @@ pub fn main() {
     let length = headers.len() as u32;
     writer.write_all(&length.to_le_bytes()).unwrap();
 
-    for header in headers {
+    for header in &headers {
         let header_slice = unsafe {
             std::slice::from_raw_parts(
-                &header as *const Header as *const u8,
+                header as *const Header as *const u8,
                 std::mem::size_of::<Header>(),
             )
         };
 
         writer.write_all(header_slice).unwrap();
     }
+
+    #[allow(dead_code)]
+    struct ExtraInfo {
+        songid: i32,
+        value1: i32,
+        new_or_top: i32,
+        value2: i32,
+    }
+
+    writer.write_all(&length.to_le_bytes()).unwrap();
+
+    for header in &headers {
+        let extra_info = ExtraInfo {
+            songid: header.songid,
+            value1: 0,
+            new_or_top: 1,
+            value2: 0,
+        };
+
+        let extra_info_slice = unsafe {
+            std::slice::from_raw_parts(
+                &extra_info as *const ExtraInfo as *const u8,
+                std::mem::size_of::<ExtraInfo>(),
+            )
+        };
+
+        writer.write_all(extra_info_slice).unwrap();
+    }
+
+    #[allow(dead_code)]
+    struct ExtraInfo2 {
+        songid: i32,
+        value1: i32,
+        value2: i32,
+        value3: i32,
+    }
+
+    // writer.write_all(&0i32.to_le_bytes()).unwrap();
+
+    for header in &headers {
+        let extra_info2 = ExtraInfo2 {
+            songid: header.songid,
+            value1: 0,
+            value2: 0,
+            value3: 0,
+        };
+
+        let extra_info2_slice = unsafe {
+            std::slice::from_raw_parts(
+                &extra_info2 as *const ExtraInfo2 as *const u8,
+                std::mem::size_of::<ExtraInfo2>(),
+            )
+        };
+
+        writer.write_all(extra_info2_slice).unwrap();
+    }
+
+    #[allow(dead_code)]
+    struct ExtraInfo3 {
+        songid: i32,
+        data: [std::ffi::c_char; 24], // format: %d %d %d
+    }
+
+    writer.write_all(&0i32.to_le_bytes()).unwrap();
 
     println!("Done!");
 }

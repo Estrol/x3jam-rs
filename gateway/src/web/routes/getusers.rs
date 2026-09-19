@@ -1,36 +1,47 @@
-pub async fn handle() -> impl axum::response::IntoResponse {
-    // let channels = vec![];
+pub fn calculate_level(exp: u64) -> u32 {
+    let base_exp = 1000.0;
+    let growth_factor = 1.5;
 
-    // let mut result_channels = Vec::new();
-    // for channel in channels.iter() {
-    //     let lock = channel.0.lock().await;
+    if exp < base_exp as u64 {
+        0
+    } else {
+        let level = ((exp as f64 / base_exp).log(growth_factor) + 1.0).floor();
+        level as u32
+    }
+}
 
-    //     let mut channel = ChannelInfo {
-    //         region: channel.1,
-    //         channel: channel.2,
-    //         users: vec![],
-    //     };
+pub async fn get() -> impl axum::response::IntoResponse {
+    let database = crate::database::get();
+    let users = database
+        .query_user_channels_list()
+        .await
+        .unwrap_or_default();
 
-    //     for client in lock.users.iter() {
-    //         let user = UserInfo {
-    //             id: client.user.id,
-    //             level: client.user.level(),
-    //             nickname: client.user.nickname().to_string(),
-    //         };
+    let mut results: Vec<ChannelInfo> = Vec::new();
+    for user in users {
+        let user_info = UserInfo {
+            level: calculate_level(user.exp),
+            nickname: user.username,
+        };
 
-    //         channel.users.push(user);
-    //     }
+        match results
+            .iter_mut()
+            .find(|c| c.region == user.region && c.channel == user.channel_id)
+        {
+            Some(channel) => {
+                channel.users.push(user_info);
+            }
+            None => {
+                results.push(ChannelInfo {
+                    region: user.region,
+                    channel: user.channel_id,
+                    users: vec![user_info],
+                });
+            }
+        }
+    }
 
-    //     result_channels.push(channel);
-    // }
-
-    // axum::Json(result_channels)
-
-    axum::Json(vec![ChannelInfo {
-        region: 0,
-        channel: 0,
-        users: vec![],
-    }])
+    axum::Json(results)
 }
 
 #[derive(serde::Serialize)]
@@ -42,7 +53,6 @@ pub struct ChannelInfo {
 
 #[derive(serde::Serialize)]
 pub struct UserInfo {
-    pub id: u64,
     pub level: u32,
     pub nickname: String,
 }

@@ -13,6 +13,8 @@ pub struct UserInfo {
     pub name: String,
     pub password_hash: String,
     pub nickname: String,
+    pub email: String,
+    pub admin: bool,
     pub exp: u64,
     pub wins: u32,
     pub losses: u32,
@@ -72,14 +74,22 @@ pub struct Score {
     pub timestamp: DateTimeUtc,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct SessionChannelInfo {
+    pub username: String,
+    pub exp: u64,
+    pub channel_id: u32,
+    pub region: u32,
+}
+
 const FEMALE_DEFAULT_EQUIPMENT: [u32; 16] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 36, 0, 0, 0, 0, 0];
 const MALE_DEFAULT_EQUIPMENT: [u32; 16] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 35, 0, 0, 0, 0, 0];
 
 #[repr(u8)]
 #[derive(Debug, Clone)]
 pub enum CharacterGender {
-    Male = 0,
-    Female = 1,
+    Female = 0,
+    Male = 1,
 }
 
 #[derive(Debug, Clone)]
@@ -93,6 +103,9 @@ pub struct GameDatabase {
     pub connection: DatabaseConnection,
     pub default_equipment_male: [u32; 16],
     pub default_equipment_female: [u32; 16],
+    pub default_mcash: u32,
+    pub default_gold: u32,
+    pub items: Vec<(u32, u32)>,
 }
 
 pub fn replace_if_needed(connection: &mut String) {
@@ -125,7 +138,7 @@ pub fn is_supported_driver(connection: &mut String) -> bool {
 }
 
 impl GameDatabase {
-    pub async fn new(connection: &str, migrate: bool) -> Self {
+    pub async fn new(connection: &str) -> Self {
         let mut connection = connection.to_string();
         if !is_supported_driver(&mut connection) {
             panic!("Unsupported database driver. Supported drivers: mysql, mariadb");
@@ -134,12 +147,6 @@ impl GameDatabase {
         let db_connection = Database::connect(connection)
             .await
             .expect("Failed to connect to the database");
-
-        if migrate {
-            models::migrations::Migrator::up(&db_connection, None)
-                .await
-                .expect("Failed to run migrations");
-        }
 
         models::session::Entity::delete_many()
             .exec(&db_connection)
@@ -150,7 +157,14 @@ impl GameDatabase {
             connection: db_connection,
             default_equipment_female: FEMALE_DEFAULT_EQUIPMENT,
             default_equipment_male: MALE_DEFAULT_EQUIPMENT,
+            default_mcash: 0,
+            default_gold: 0,
+            items: Vec::new(),
         }
+    }
+
+    pub async fn close(&self) {
+        self.connection.close().await;
     }
 
     pub fn set_default_equipment(&mut self, gender: CharacterGender, data: [u32; 16]) {
@@ -158,6 +172,18 @@ impl GameDatabase {
             CharacterGender::Male => self.default_equipment_male = data,
             CharacterGender::Female => self.default_equipment_female = data,
         };
+    }
+
+    pub fn set_default_mcash(&mut self, mcash: u32) {
+        self.default_mcash = mcash;
+    }
+
+    pub fn set_default_gold(&mut self, gold: u32) {
+        self.default_gold = gold;
+    }
+
+    pub fn set_default_items(&mut self, items: Vec<(u32, u32)>) {
+        self.items = items;
     }
 
     pub async fn get_user_authentication_info(
@@ -185,6 +211,8 @@ impl GameDatabase {
                 name: model.name,
                 password_hash: model.password_hash,
                 nickname: model.nickname,
+                email: model.email,
+                admin: model.admin,
                 exp: model.exp,
                 wins: model.wins,
                 losses: model.losses,
@@ -210,6 +238,8 @@ impl GameDatabase {
                 name: model.name,
                 password_hash: model.password_hash,
                 nickname: model.nickname,
+                email: model.email,
+                admin: model.admin,
                 exp: model.exp,
                 wins: model.wins,
                 losses: model.losses,
@@ -229,6 +259,7 @@ impl GameDatabase {
         username: &str,
         password_hash: &str,
         nickname: &str,
+        email: &str,
         gender: CharacterGender,
     ) -> Option<UserInfo> {
         let new_user = models::user::ActiveModel {
@@ -239,6 +270,9 @@ impl GameDatabase {
                 CharacterGender::Female => models::user::Gender::Female,
                 CharacterGender::Male => models::user::Gender::Male,
             }),
+            mcash: Set(self.default_mcash),
+            point: Set(self.default_gold),
+            email: Set(email.to_string()),
             ..Default::default()
         };
 
@@ -264,19 +298,40 @@ impl GameDatabase {
             pant: Set(default_equipment[6]),
             glass: Set(default_equipment[7]),
             earring: Set(default_equipment[8]),
-            shoes: Set(default_equipment[9]),
-            face: Set(default_equipment[10]),
-            wing: Set(default_equipment[11]),
-            hair_accessory: Set(default_equipment[12]),
-            instrument_accessory: Set(default_equipment[13]),
-            cloth_accessory: Set(default_equipment[14]),
-            pet: Set(default_equipment[15]),
+            cloth_accessory: Set(default_equipment[9]),
+            shoes: Set(default_equipment[10]),
+            face: Set(default_equipment[11]),
+            wing: Set(default_equipment[12]),
+            hair_accessory: Set(default_equipment[13]),
+            pet: Set(default_equipment[14]),
+            instrument_accessory: Set(default_equipment[15]),
         };
 
         models::equipment::Entity::insert(equipment)
             .exec(&self.connection)
             .await
             .expect("Failed to insert equipment for new user");
+
+        // Bulk insert default items for the new user
+        if !self.items.is_empty() {
+            let active_models: Vec<models::item::ActiveModel> = self
+                .items
+                .iter()
+                .enumerate()
+                .map(|(slot, &(item_id, quantity))| models::item::ActiveModel {
+                    id: NotSet,
+                    user_id: Set(insert_result.last_insert_id),
+                    slot: Set(slot as u8),
+                    item_id: Set(item_id),
+                    quantity: Set(quantity),
+                })
+                .collect();
+
+            models::item::Entity::insert_many(active_models)
+                .exec(&self.connection)
+                .await
+                .expect("Failed to insert default items for new user");
+        }
 
         self.get_user_by_id(insert_result.last_insert_id).await
     }
@@ -299,6 +354,8 @@ impl GameDatabase {
                     name: Set(user.name.clone()),
                     password_hash: Set(user.password_hash.clone()),
                     nickname: Set(user.nickname.clone()),
+                    email: Set(user.email.clone()),
+                    admin: Set(user.admin),
                     exp: Set(user.exp),
                     wins: Set(user.wins),
                     losses: Set(user.losses),
@@ -329,6 +386,8 @@ impl GameDatabase {
                 name: Set(user.name.clone()),
                 password_hash: Set(user.password_hash.clone()),
                 nickname: Set(user.nickname.clone()),
+                email: Set(user.email.clone()),
+                admin: Set(user.admin),
                 exp: Set(user.exp),
                 wins: Set(user.wins),
                 losses: Set(user.losses),
@@ -472,25 +531,198 @@ impl GameDatabase {
         Ok(())
     }
 
+    pub async fn query_user_channels_list(&self) -> Result<Vec<SessionChannelInfo>, Box<dyn std::error::Error + Send + Sync>> {
+        // Query the database for all sessions with non-null channel_id and region
+        // then inner join with the users table to get the username
+
+        let sessions_with_channels = models::session::Entity::find()
+            .filter(models::session::Column::ChannelId.is_not_null())
+            .filter(models::session::Column::Region.is_not_null())
+            .find_also_related(models::user::Entity)
+            .all(&self.connection)
+            .await?;
+
+        let result: Vec<SessionChannelInfo> = sessions_with_channels
+            .into_iter()
+            .filter_map(|(session, user)| {
+                let user = user?;
+
+                Some(SessionChannelInfo {
+                    username: user.name,
+                    exp: user.exp,
+                    channel_id: session.channel_id?,
+                    region: session.region?,
+                })
+            })
+            .collect();
+
+        Ok(result)
+    }
+
     pub async fn create_session(
         &self,
         user_id: u64,
-    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<Option<String>, Box<dyn std::error::Error + Send + Sync>> {
         let existing_session = models::session::Entity::find()
             .filter(models::session::Column::UserId.eq(user_id))
             .one(&self.connection)
             .await?;
 
-        if existing_session.is_some() {
-            return Ok(false);
+        let fixed_now = chrono::Utc::now().fixed_offset();
+
+        if let Some(session) = existing_session {
+            if session.expiration > fixed_now {
+                return Ok(Some(session.token));
+            }
         }
+
+        // token only active 1 hour
+        let expiration = chrono::Utc::now() + chrono::Duration::hours(1);
+        let token = uuid::Uuid::new_v4().to_string();
 
         let new_session = models::session::ActiveModel {
             id: NotSet,
             user_id: Set(user_id),
+            token: Set(token.clone()),
+            expiration: Set(expiration.into()),
+            socket_id: Set(None),
+            channel_id: Set(None),
+            region: Set(None),
         };
 
         models::session::Entity::insert(new_session)
+            .exec(&self.connection)
+            .await?;
+
+        Ok(Some(token))
+    }
+
+    pub async fn session_set_channel(
+        &self,
+        user_id: u64,
+        region: u32,
+        channel_id: u32,
+    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+        let Some(mut session) = models::session::Entity::find()
+            .filter(models::session::Column::UserId.eq(user_id))
+            .one(&self.connection)
+            .await? else {
+                return Ok(false);
+            };
+
+        let fixed_now = chrono::Utc::now().fixed_offset();
+
+        if session.expiration < fixed_now {
+            return Ok(false);
+        }
+
+        session.channel_id = Some(channel_id);
+        session.region = Some(region);
+
+        let active_model: models::session::ActiveModel = session.into();
+
+        models::session::Entity::update(active_model)
+            .exec(&self.connection)
+            .await?;
+
+        Ok(true)
+    }
+
+    pub async fn get_session_by_token(
+        &self,
+        token: &str,
+    ) -> Result<Option<models::session::Model>, Box<dyn std::error::Error + Send + Sync>> {
+        let session = models::session::Entity::find()
+            .filter(models::session::Column::Token.eq(token))
+            .one(&self.connection)
+            .await?;
+
+        Ok(session)
+    }
+
+    pub async fn update_session(
+        &self,
+        user_id: u64,
+    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+        let Some(mut session) = models::session::Entity::find()
+            .filter(models::session::Column::UserId.eq(user_id))
+            .one(&self.connection)
+            .await? else {
+                return Ok(false);
+            };
+
+        let fixed_now = chrono::Utc::now().fixed_offset();
+
+        if session.expiration < fixed_now {
+            return Ok(false);
+        }
+
+        session.expiration = (chrono::Utc::now() + chrono::Duration::hours(1)).into();
+
+        let active_model: models::session::ActiveModel = session.into();
+
+        models::session::Entity::update(active_model)
+            .exec(&self.connection)
+            .await?;
+
+        Ok(true)
+    }
+
+    pub async fn session_set_socket(
+        &self,
+        user_id: u64,
+        socket_id: u32,
+    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+        let Some(mut session) = models::session::Entity::find()
+            .filter(models::session::Column::UserId.eq(user_id))
+            .one(&self.connection)
+            .await? else {
+                return Ok(false);
+            };
+
+        let fixed_now = chrono::Utc::now().fixed_offset();
+
+        if session.expiration < fixed_now {
+            return Ok(false);
+        }
+
+        if session.socket_id.is_some() && session.socket_id.unwrap() != socket_id {
+            return Ok(false);
+        }
+
+        session.socket_id = Some(socket_id);
+
+        let active_model: models::session::ActiveModel = session.into();
+
+        models::session::Entity::update(active_model)
+            .exec(&self.connection)
+            .await?;
+
+        Ok(true)
+    }
+
+    pub async fn session_remove_socket(
+        &self,
+        user_id: u64,
+    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+        let Some(mut session) = models::session::Entity::find()
+            .filter(models::session::Column::UserId.eq(user_id))
+            .one(&self.connection)
+            .await? else {
+                return Ok(false);
+            };
+
+        let fixed_now = chrono::Utc::now().fixed_offset();
+
+        if session.expiration < fixed_now {
+            return Ok(false);
+        }
+
+        session.socket_id = None;
+
+        let active_model: models::session::ActiveModel = session.into();
+
+        models::session::Entity::update(active_model)
             .exec(&self.connection)
             .await?;
 

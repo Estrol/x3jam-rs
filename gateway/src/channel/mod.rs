@@ -4,10 +4,14 @@ use std::{
 };
 
 use futures::FutureExt as _;
-use tokio::sync::{mpsc::UnboundedSender, oneshot};
+use tokio::{
+    sync::{mpsc::UnboundedSender, oneshot},
+    task::JoinHandle,
+};
 
 use crate::{
     gateway::{commands::EventId, events::IEventData, routes::myroom::InventoryEquipResponse},
+    itemlist::ItemGender,
     room::{MusicId, RoomMode},
     user::{ItemId, User},
 };
@@ -22,7 +26,6 @@ pub struct ChannelHandle {
     pub id: u32,
 
     pub sender: tokio::sync::mpsc::UnboundedSender<ChannelRequest>,
-    pub join_handle: tokio::task::JoinHandle<()>,
 
     pub max_users: usize,
     pub counter: Arc<AtomicUsize>,
@@ -189,7 +192,7 @@ pub async fn process_command(
     weak: &mut Option<ChannelWeakHandle>,
 ) {
     let Some(data) = request.data.take() else {
-        println!("Received ChannelRequest with no data");
+        log::info!("Received ChannelRequest with no data");
         return;
     };
 
@@ -234,26 +237,15 @@ pub async fn process_command(
                 if !result.is_none() {
                     counter += 1;
                 }
-
-                #[cfg(debug_assertions)]
-                {
-                    if result.is_none() {
-                        println!(
-                            "User {} sent client list with unknown songid: {}",
-                            user_id,
-                            id.songid()
-                        );
-                    }
-                }
             }
 
             let (user, _) = channel
                 .get_user_mut(user_id)
                 .expect("User not found for SetClientList");
 
-            println!(
+            log::info!(
                 "User {} set client list with {} valid entries out of {}",
-                user_id,
+                user.nickname(),
                 counter,
                 client_ids.len()
             );
@@ -268,7 +260,7 @@ pub async fn process_command(
         }
         ChannelCommand::SyncUserInfo { user_id } => {
             let Some((user, _)) = channel.get_user_mut(user_id) else {
-                println!("User {} not found for sync", user_id);
+                log::info!("User {} not found for sync", user_id);
                 return;
             };
 
@@ -285,7 +277,7 @@ pub async fn process_command(
             max_level,
         } => {
             let Some(channel_handle) = weak.as_ref() else {
-                println!("Weak handle not set for channel");
+                log::info!("Weak handle not set for channel");
                 return;
             };
 
@@ -319,7 +311,7 @@ pub async fn process_command(
         }
         ChannelCommand::Kicked { user_id } => {
             let Some(user) = channel.users.get_mut(user_id) else {
-                println!("User {} not found for Kicked", user_id);
+                log::info!("User {} not found for Kicked", user_id);
                 return;
             };
 
@@ -343,9 +335,11 @@ pub async fn process_command(
             item_slot,
         } => {
             let Some((user, _)) = channel.get_user_mut(user_id) else {
-                println!("User {} not found for EquipItem", user_id);
+                log::info!("User {} not found for EquipItem", user_id);
                 return;
             };
+
+            let itemlist = crate::itemlist::get();
 
             let item = match user.get_item_from_slot(item_slot) {
                 Some(item) => item,
@@ -356,6 +350,25 @@ pub async fn process_command(
                     });
                 }
             };
+
+            if let Some(info) = itemlist.get_item(item.id) {
+                let chara_item_gender = match user.info.gender {
+                    database::CharacterGender::Female => ItemGender::Female,
+                    database::CharacterGender::Male => ItemGender::Male,
+                };
+
+                if info.gender != chara_item_gender && info.gender != ItemGender::Any {
+                    return request.send(InventoryEquipResponse {
+                        result: 1,
+                        ..Default::default()
+                    });
+                }
+            } else {
+                return request.send(InventoryEquipResponse {
+                    result: 1,
+                    ..Default::default()
+                });
+            }
 
             let old = match user.set_equipment(character_slot, item.id) {
                 Some(old) => old,
@@ -392,43 +405,60 @@ pub async fn make_channel(
     id: u32,
     max_users: usize,
     path: String,
-) -> Result<ChannelHandle, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<(ChannelHandle, JoinHandle<()>), Box<dyn std::error::Error + Send + Sync>> {
     let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel::<ChannelRequest>();
     let (mut channel, counter) = channel::Channel::new(region, id, &path).await;
 
     let sender_for_room = sender.clone();
 
-    let handle = tokio::task::spawn(async move {
-        let mut weak_handle = None;
+    let (tx, rx) = tokio::sync::oneshot::channel::<()>();
 
-        loop {
-            tokio::select! {
-                Some(request) = receiver.recv() => {
-                    let unwind_safe = std::panic::AssertUnwindSafe(process_command(
-                        &mut channel,
-                        request,
-                        &cancelation_token,
-                        &sender_for_room,
-                        &mut weak_handle
-                    ));
+    let join_handle = crate::util::spawn_named(
+        &format!("Channel Region: {}, Id: {}", region, id),
+        async move {
+            log::info!(
+                "Channel {}:{} started with {} lists",
+                region,
+                id,
+                channel.lists.len()
+            );
 
-                    if unwind_safe.catch_unwind().await.is_err() {
-                        println!("Channel {}:{} panicked while processing a request", region, id);
+            tx.send(()).expect("Failed to send channel ready signal");
+
+            let mut weak_handle = None;
+
+            loop {
+                tokio::select! {
+                    Some(request) = receiver.recv() => {
+                        let unwind_safe = std::panic::AssertUnwindSafe(process_command(
+                            &mut channel,
+                            request,
+                            &cancelation_token,
+                            &sender_for_room,
+                            &mut weak_handle
+                        ));
+
+                        if unwind_safe.catch_unwind().await.is_err() {
+                            log::info!("Channel {}:{} panicked while processing a request", region, id);
+                        }
+                    }
+                    _ = cancelation_token.cancelled() => {
+                        channel.shutdown().await;
+                        break;
                     }
                 }
-                _ = cancelation_token.cancelled() => {
-                    channel.shutdown().await;
-                    break;
-                }
             }
-        }
-    });
+
+            log::info!("Channel {}:{} has been shut down", region, id);
+        },
+    );
+
+    rx.await.expect("Failed to receive channel ready signal");
 
     let handle = ChannelHandle {
         region,
         id,
         sender,
-        join_handle: handle,
         max_users,
         counter,
     };
@@ -440,7 +470,7 @@ pub async fn make_channel(
         .await
         .map_err(|e| format!("Failed to set weak handle for channel: {}", e))?;
 
-    Ok(handle)
+    Ok((handle, join_handle))
 }
 
 pub enum ChannelCommand {

@@ -1,9 +1,8 @@
+use encoder::stringutil::CStrEx;
+
 use crate::{
     channel::ChannelCommand,
-    gateway::{
-        commands::ResponseId,
-        events::room::PlayingState,
-    },
+    gateway::{commands::ResponseId, events::room::PlayingState},
     room::{
         ModifierReport, Modifiers, MusicId, RoomArena, RoomCommand, RoomDifficulty, RoomMode,
         RoomSpeed, RoomWeakHandle, SkillId, TeamId,
@@ -21,9 +20,9 @@ pub enum CreateRoomResult {
 
 #[derive(encoder::StructDeserializer)]
 struct CreateRoomRequest {
-    title: std::ffi::CString,
+    title: CStrEx,
     mode: RoomMode,
-    password: Option<std::ffi::CString>,
+    password: Option<CStrEx>,
     min_level: u8,
     max_level: u8,
 }
@@ -38,15 +37,16 @@ struct CreateRoomResponse {
 #[gateway_derive::route(RequestId::ListRoomCreateRoom)]
 async fn handle_create_room(client: &mut super::Client, request: &CreateRoomRequest) {
     let Some((user_id, channel)) = client.channel() else {
-        println!("Client is not in a channel");
+        log::info!("Client is not in a channel");
         return;
     };
 
-    let title = request.title.to_string_lossy().to_string();
+    let title = request.title.to_string();
     let password = request
         .password
         .clone()
-        .map(|p| p.to_string_lossy().to_string());
+        .map(|p| p.to_string());
+
     let mode = request.mode;
     let min_level = request.min_level;
     let max_level = request.max_level;
@@ -64,7 +64,7 @@ async fn handle_create_room(client: &mut super::Client, request: &CreateRoomRequ
         )
         .await
     else {
-        println!("Failed to send create room command to channel");
+        log::info!("Failed to send create room command to channel");
         return;
     };
 
@@ -93,7 +93,7 @@ async fn handle_create_room(client: &mut super::Client, request: &CreateRoomRequ
     let response = CreateRoomResponse {
         result,
         room_id: id,
-        premium: false
+        premium: false,
     };
 
     client
@@ -112,7 +112,7 @@ pub struct SetRoomMusic {
 #[gateway_derive::route(RequestId::RoomSetMusicId)]
 async fn handle_set_room_music(client: &mut super::Client, packet: &SetRoomMusic) {
     let Some((user_id, channel)) = client.room() else {
-        println!("Client is not in a channel");
+        log::info!("Client is not in a channel");
         return;
     };
 
@@ -130,7 +130,7 @@ async fn handle_set_room_music(client: &mut super::Client, packet: &SetRoomMusic
 #[gateway_derive::route(RequestId::RoomSetArena)]
 async fn handle_set_room_arena(client: &mut super::Client, packet: &RoomArena) {
     let Some((user_id, channel)) = client.room() else {
-        println!("Client is not in a channel");
+        log::info!("Client is not in a channel");
         return;
     };
 
@@ -146,7 +146,7 @@ async fn handle_set_room_arena(client: &mut super::Client, packet: &RoomArena) {
 #[gateway_derive::route(RequestId::RoomSetTeam)]
 async fn handle_set_room_team(client: &mut super::Client, packet: &TeamId) {
     let Some((user_id, channel)) = client.room() else {
-        println!("Client is not in a channel");
+        log::info!("Client is not in a channel");
         return;
     };
 
@@ -162,7 +162,7 @@ async fn handle_set_room_team(client: &mut super::Client, packet: &TeamId) {
 #[gateway_derive::route(RequestId::RoomSetSkill)]
 async fn handle_set_room_ring(client: &mut super::Client, packet: &Vec<SkillId>) {
     let Some((user_id, channel)) = client.room() else {
-        println!("Client is not in a channel");
+        log::info!("Client is not in a channel");
         return;
     };
 
@@ -186,7 +186,7 @@ pub enum GameStartResult {
 #[gateway_derive::route(RequestId::GameStart)]
 async fn handle_start_game(client: &mut super::Client, _packet: &()) {
     let Some((user_id, channel)) = client.room() else {
-        println!("Client is not in a channel");
+        log::info!("Client is not in a channel");
         return;
     };
 
@@ -204,13 +204,13 @@ async fn handle_start_game(client: &mut super::Client, _packet: &()) {
 }
 
 #[gateway_derive::route(RequestId::RoomNameChange)]
-async fn handle_change_title(client: &mut super::Client, packet: &std::ffi::CString) {
+async fn handle_change_title(client: &mut super::Client, packet: &CStrEx) {
     let Some((user_id, channel)) = client.room() else {
-        println!("Client is not in a channel");
+        log::info!("Client is not in a channel");
         return;
     };
 
-    let title = packet.to_string_lossy().to_string();
+    let title = packet.to_string();
 
     channel
         .send::<()>(RoomCommand::SetName {
@@ -224,7 +224,7 @@ async fn handle_change_title(client: &mut super::Client, packet: &std::ffi::CStr
 #[gateway_derive::route(RequestId::RoomSetReady)]
 async fn handle_set_ready(client: &mut super::Client, _packet: &()) {
     let Some((user_id, channel)) = client.room() else {
-        println!("Client is not in a channel");
+        log::info!("Client is not in a channel");
         return;
     };
 
@@ -235,13 +235,13 @@ async fn handle_set_ready(client: &mut super::Client, _packet: &()) {
 }
 
 #[gateway_derive::route(RequestId::RoomChat)]
-async fn handle_room_chat(client: &mut super::Client, packet: &std::ffi::CString) {
+async fn handle_room_chat(client: &mut super::Client, packet: &CStrEx) {
     let Some((user_id, channel)) = client.room() else {
-        println!("Client is not in a channel");
+        log::info!("Client is not in a channel");
         return;
     };
 
-    let message = packet.to_string_lossy().to_string();
+    let message = packet.to_string();
 
     channel
         .send::<()>(RoomCommand::RoomChat { user_id, message })
@@ -260,7 +260,7 @@ struct SetModifierRequest {
 #[gateway_derive::route(RequestId::RoomSetModifier)]
 async fn handle_set_modifier(client: &mut super::Client, packet: &SetModifierRequest) {
     let Some((user_id, channel)) = client.room() else {
-        println!("Client is not in a channel");
+        log::info!("Client is not in a channel");
         return;
     };
 
@@ -278,7 +278,7 @@ async fn handle_set_modifier(client: &mut super::Client, packet: &SetModifierReq
 #[gateway_derive::route(RequestId::RoomSetAllModifiers)]
 async fn handle_set_all_modifiers(client: &mut super::Client, packet: &ModifierReport) {
     let Some((user_id, channel)) = client.room() else {
-        println!("Client is not in a channel");
+        log::info!("Client is not in a channel");
         return;
     };
 
@@ -294,7 +294,7 @@ async fn handle_set_all_modifiers(client: &mut super::Client, packet: &ModifierR
 #[gateway_derive::route(RequestId::RoomSlotToggle)]
 async fn handle_toggle_slot(client: &mut super::Client, packet: &u8) {
     let Some((user_id, room)) = client.room() else {
-        println!("Client is not in a channel");
+        log::info!("Client is not in a channel");
         return;
     };
 
@@ -309,7 +309,7 @@ async fn handle_toggle_slot(client: &mut super::Client, packet: &u8) {
 #[gateway_derive::route(RequestId::RoomSetMusicState)]
 async fn handle_set_music_state(client: &mut super::Client, packet: &PlayingState) {
     let Some((user_id, room)) = client.room() else {
-        println!("Client is not in a channel");
+        log::info!("Client is not in a channel");
         return;
     };
 

@@ -1,21 +1,12 @@
 use sea_orm_migration::prelude::*;
-use sea_query::Iden;
 
-#[derive(Iden)]
-pub enum Session {
-    #[iden = "sessions"]
-    Table,
-    #[iden = "id"]
-    Id,
-    #[iden = "user_id"]
-    UserId,
-}
+use super::user::User;
 
 pub struct Migration;
 
 impl MigrationName for Migration {
     fn name(&self) -> &str {
-        "m20260613_create_session"
+        "base_create_items"
     }
 }
 
@@ -25,21 +16,24 @@ impl MigrationTrait for Migration {
         manager
             .create_table(
                 Table::create()
-                    .table(Session::Table)
+                    .table(Items::Table)
                     .if_not_exists()
                     .col(
-                        ColumnDef::new(Session::Id)
+                        ColumnDef::new(Items::Id)
                             .unsigned()
                             .not_null()
                             .auto_increment()
                             .primary_key(),
                     )
-                    .col(ColumnDef::new(Session::UserId).big_unsigned().not_null())
+                    .col(ColumnDef::new(Items::UserId).big_unsigned().not_null())
+                    .col(ColumnDef::new(Items::Slot).unsigned().not_null())
+                    .col(ColumnDef::new(Items::ItemId).unsigned().not_null())
+                    .col(ColumnDef::new(Items::Quantity).unsigned().not_null())
                     .foreign_key(
                         ForeignKey::create()
-                            .name("fk_sessions_user_id")
-                            .from(Session::Table, Session::UserId)
-                            .to(super::user::User::Table, super::user::User::Id)
+                            .name("fk_items_user_id")
+                            .from(Items::Table, Items::UserId)
+                            .to(User::Table, User::Id)
                             .on_delete(ForeignKeyAction::Cascade),
                     )
                     .to_owned(),
@@ -49,7 +43,23 @@ impl MigrationTrait for Migration {
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         manager
-            .drop_table(Table::drop().table(Session::Table).if_exists().to_owned())
+            .drop_table(Table::drop().table(Items::Table).to_owned())
             .await
     }
+}
+
+#[derive(Iden)]
+pub enum Items {
+    #[iden = "items"]
+    Table,
+    #[iden = "id"]
+    Id,
+    #[iden = "user_id"]
+    UserId,
+    #[iden = "slot"]
+    Slot,
+    #[iden = "item_id"]
+    ItemId,
+    #[iden = "quantity"]
+    Quantity,
 }

@@ -16,6 +16,8 @@ pub async fn init() {
     let filename = super::config::get_str("ITEMLIST", "FILENAME", "itemlist.dat");
     let path = format!("./resources/data/{}", filename);
 
+    log::info!("Loading item list from {}", path);
+
     let list = itemlist::ItemList::load_from_file(&path)
         .await
         .expect("Failed to load item list");

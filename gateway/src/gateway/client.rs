@@ -7,10 +7,7 @@ use tcpserver::{IClient, client};
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::{
-    channel::ChannelWeakHandle,
-    gateway::{commands::EventId, events::IEventData, stateful::StatefulXor},
-    room::{MusicId, RoomWeakHandle},
-    user::User,
+    channel::ChannelWeakHandle, gateway::{commands::EventId, events::IEventData, stateful::StatefulXor}, room::{MusicId, RoomWeakHandle}, session::Session, user::User,
 };
 
 const MAX_PACKET_SIZE: usize = 1024 * 8; // 8 KB
@@ -34,7 +31,7 @@ pub struct Client {
     pub queue: Vec<Vec<u8>>,
     pub queue_begin: bool,
 
-    pub session_entered: bool,
+    pub session: Option<Session>,
     pub channel_handle: Option<ChannelWeakHandle>,
     pub room_handle: Option<RoomWeakHandle>,
     pub version_checked: bool,
@@ -66,10 +63,10 @@ impl Client {
 
         let data = data.into_inner();
 
-        println!(
-            "Sending packet to client {}: ID = {:#06X}, Length = {}",
-            self.id, id, length
-        );
+        // log::info!(
+        //     "Sending packet to client {}: ID = {:#06X}, Length = {}",
+        //     self.id, id, length
+        // );
 
         self.send(&data).await?;
         Ok(())
@@ -122,6 +119,10 @@ impl Client {
     pub fn user(&self) -> Option<&User> {
         self.user.as_ref()
     }
+
+    pub fn session_mut(&mut self) -> Option<&mut Session> {
+        self.session.as_mut()
+    }
 }
 
 client!(Client, |socket, run, id, token| {
@@ -140,7 +141,7 @@ client!(Client, |socket, run, id, token| {
         user: None,
         queue: Vec::new(),
         queue_begin: false,
-        session_entered: false,
+        session: None,
         channel_handle: None,
         room_handle: None,
         version_checked: false,

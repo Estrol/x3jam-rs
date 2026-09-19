@@ -1,12 +1,14 @@
+use encoder::stringutil::CStrEx;
+use tcpserver::IClient;
+
 use crate::{
-    gateway::commands::ResponseId,
-    user::{User, UserError},
+    gateway::commands::ResponseId, session::{LoginError, Session},
 };
 
 #[derive(encoder::StructDeserializer)]
 pub struct LoginRequest {
-    pub username: std::ffi::CString,
-    pub password: std::ffi::CString,
+    pub username: CStrEx,
+    pub password: CStrEx,
 }
 
 #[repr(i32)]
@@ -18,23 +20,35 @@ pub enum LoginResult {
     GenericError = -101,
 }
 
+#[derive(encoder::StructSerializer)]
+pub struct GatewayLoginResponse {
+    pub result: LoginResult,
+    pub gateway_code: u32, // at the time, it's just userid
+}
+
 #[gateway_derive::route(RequestId::GatewayLogin)]
 pub async fn login_proc(client: &mut super::Client, request: &LoginRequest) {
-    let username = request.username.to_string_lossy().to_string();
-    let password = request.password.to_string_lossy().to_string();
+    let username = request.username.to_string();
+    let password = request.password.to_string();
 
-    println!(
+    log::info!(
         "Client {} is attempting to log in with username '{}'",
-        client.id, username
+        client.id,
+        username
     );
 
-    let result = match User::verify_credentials(&username, &password).await {
-        Ok(_) => LoginResult::Success,
-        Err(UserError::InvalidCredentials) => LoginResult::InvalidCredentials,
-        Err(UserError::Error(err)) => {
-            println!("[Error] Failed to verify credentials: {}", err);
-            LoginResult::GenericError
+    let (result, id) = match Session::login(&username, &password).await {
+        Ok(session) => (LoginResult::Success, session.uid),
+        Err(LoginError::InvalidCredentials) => (LoginResult::InvalidCredentials, u64::MAX),
+        Err(LoginError::GenericError(e)) => {
+            log::info!("[Error] Failed to verify credentials for user '{}': {}", username, e);
+            (LoginResult::GenericError, u64::MAX)
         }
+    };
+
+    let result = GatewayLoginResponse {
+        result,
+        gateway_code: id as u32, // at the time, it's just userid
     };
 
     client
@@ -51,36 +65,41 @@ struct VersionResponse {
 
 #[gateway_derive::route(RequestId::GatewayReauth)]
 pub async fn reauth_proc(client: &mut super::Client, request: &LoginRequest) {
-    let username = request.username.to_string_lossy().to_string();
-    let password = request.password.to_string_lossy().to_string();
+    let username = request.username.to_string();
+    let password = request.password.to_string();
 
-    println!(
+    log::info!(
         "Client {} is attempting to re-authenticate with username '{}'",
-        client.id, username
+        client.id,
+        username
     );
 
-    let result = match User::verify_credentials(&username, &password).await {
-        Ok(user_id) => {
-            if !User::try_create_session(user_id).await.unwrap_or(false) {
-                LoginResult::AlreadyLoggedIn
-            } else {
-                if let Ok(mut user) = User::request_user(user_id, true).await {
-                    user.sender = client.sender.clone();
-
-                    client.user = Some(user);
-                    client.session_entered = true;
-
-                    LoginResult::Success
-                } else {
-                    User::delete_session(user_id).await;
+    let result = match Session::verify(&password).await {
+        Ok(Some(session)) => {
+            if session.bind_socket(client.id() as u32).await.unwrap_or(false) {
+                if let Err(e) = session.update().await {
+                    log::info!(
+                        "[Error] Failed to update session for user '{}': {}",
+                        username,
+                        e
+                    );
 
                     LoginResult::GenericError
+                } else {
+                    client.session = Some(session);
+                    LoginResult::Success
                 }
+            } else {
+                LoginResult::AlreadyLoggedIn
             }
         }
-        Err(UserError::InvalidCredentials) => LoginResult::InvalidCredentials,
-        Err(UserError::Error(err)) => {
-            println!("[Error] Failed to verify credentials: {}", err);
+        Ok(None) => LoginResult::InvalidCredentials,
+        Err(e) => {
+            log::info!(
+                "[Error] Failed to verify session for user '{}': {}",
+                username,
+                e
+            );
             LoginResult::GenericError
         }
     };
@@ -136,7 +155,7 @@ pub async fn request_version_proc(client: &mut super::Client, _request: &Version
     //     //     .expect("Failed to send version response");
 
     //     // let Some(sender) = client.sender.as_ref() else {
-    //     //     println!("Client sender is not available");
+    //     //     log::info!("Client sender is not available");
     //     //     return;
     //     // };
 

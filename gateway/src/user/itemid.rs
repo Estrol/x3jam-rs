@@ -1,4 +1,4 @@
-#[derive(Debug, Clone, Copy, encoder::StructSerializer, Default)]
+#[derive(Debug, Clone, Copy, encoder::StructSerializer, Default, encoder::StructDeserializer)]
 pub struct ItemId {
     pub id: u32,
     pub amount: u32,

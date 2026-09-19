@@ -45,7 +45,7 @@ pub fn route(attr: TokenStream, item: TokenStream) -> TokenStream {
                             }
                             Err(e) => {
                                 // You can replace this with your preferred logging crate (e.g., tracing or log)
-                                eprintln!("Failed to parse payload for route: {:?} err: {:?} data: {:?}", crate::gateway::commands::#route_id, e, packet.body);
+                                log::info!("Failed to parse payload for route: {:?} err: {:?} data: {:?}", crate::gateway::commands::#route_id, e, packet.body);
                             }
                         }
                     })

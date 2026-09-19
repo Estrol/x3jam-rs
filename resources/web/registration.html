@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>X3-JAM Server - Registration</title>
+
+<style>
+body {
+    background-color: black;
+    color: white;
+    font-family: Arial, sans-serif;
+    padding: 20px;
+    font-size: 12px;
+}
+
+h1 {
+    margin: 0 0 10px 0;
+    font-size: 16px;
+}
+
+button {
+    padding: 4px 10px;
+    font-size: 12px;
+    margin-top: 10px;
+}
+
+/* Added basic styling for form elements to fit the dark theme */
+.form-group {
+    margin-bottom: 10px;
+}
+
+label {
+    display: inline-block;
+    width: 80px;
+}
+
+input, select {
+    font-family: Arial, sans-serif;
+    font-size: 12px;
+    padding: 2px 4px;
+}
+
+#message {
+    margin-top: 15px;
+    font-weight: bold;
+}
+</style>
+</head>
+
+<body>
+
+<h1>Register New Account</h1>
+
+<div id="registration-form">
+    <div class="form-group">
+        <label for="username">Username:</label>
+        <input type="text" id="username" name="username">
+    </div>
+    
+    <div class="form-group">
+        <label for="password">Password:</label>
+        <input type="password" id="password" name="password">
+    </div>
+    
+    <div class="form-group">
+        <label for="email">Email:</label>
+        <input type="email" id="email" name="email">
+    </div>
+
+    <div class="form-group">
+        <label for="gender">Gender:</label>
+        <select id="gender" name="gender">
+            <option value="male">Male</option>
+            <option value="female">Female</option>
+        </select>
+    </div>
+
+    <div class="form-group">
+        <label for="token" >Token:</label>
+        <input type="text" id="token" name="token">
+    </div>
+
+    <button type="button" onclick="submitRegistration()">
+        Register
+    </button>
+</div>
+
+<div id="message"></div>
+
+<script type="text/javascript">
+function parseJSON(text) {
+    if (window.JSON && window.JSON.parse) {
+        return window.JSON.parse(text);
+    }
+    return eval("(" + text + ")");
+}
+
+function submitRegistration() {
+    var messageBox = document.getElementById("message");
+    
+    // Gather values from the form
+    var usernameVal = document.getElementById("username").value;
+    var passwordVal = document.getElementById("password").value;
+    var emailVal = document.getElementById("email").value;
+    var genderVal = document.getElementById("gender").value;
+    var tokenVal = document.getElementById("token").value;
+
+    // Basic frontend validation mirroring the backend requirements
+    if (!usernameVal || !passwordVal || !emailVal) {
+        messageBox.style.color = "red";
+        messageBox.innerHTML = "Username, password, and email cannot be empty.";
+        return;
+    }
+
+    messageBox.style.color = "white";
+    messageBox.innerHTML = "Registering...";
+
+    var xhr = new XMLHttpRequest();
+
+    xhr.onreadystatechange = function () {
+        if (xhr.readyState !== 4) return;
+
+        if (xhr.status !== 200) {
+            messageBox.style.color = "red";
+            messageBox.innerHTML = "Failed to communicate with server.<br/>HTTP " + xhr.status;
+            return;
+        }
+
+        try {
+            // Parse the RegistrationResponse JSON
+            var response = parseJSON(xhr.responseText);
+
+            if (response.success) {
+                messageBox.style.color = "lightgreen";
+                messageBox.innerHTML = response.message;
+            } else {
+                messageBox.style.color = "red";
+                messageBox.innerHTML = "Error: " + response.message;
+            }
+
+        } catch (e) {
+            messageBox.style.color = "red";
+            messageBox.innerHTML = "Failed to parse response.<br/>" + e.message;
+        }
+    };
+
+    // Construct the RegistrationRequest JSON payload
+    var payload = {
+        username: usernameVal,
+        password: passwordVal,
+        email: emailVal,
+        gender: genderVal,
+        token: tokenVal
+    };
+
+    // Assuming the POST endpoint is at the same path handling the HTML
+    xhr.open("POST", window.location.pathname, true);
+    xhr.setRequestHeader("Content-Type", "application/json;charset=UTF-8");
+    xhr.send(JSON.stringify(payload));
+}
+</script>
+
+</body>
+</html>

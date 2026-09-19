@@ -1,4 +1,5 @@
 use database::Equipment;
+use encoder::stringutil::CStrEx;
 
 use crate::{
     gateway::{
@@ -13,7 +14,7 @@ use crate::{
 #[derive(gateway_derive::Event, encoder::StructSerializer)]
 pub struct RoomOnPlayerEnterEventArgs {
     pub slot: u8,
-    pub nickname: std::ffi::CString,
+    pub nickname: CStrEx,
     pub level: u32,
     pub gender: u8,
     pub team: TeamId,
@@ -47,8 +48,8 @@ async fn on_player_leave(client: &mut super::Client, data: &RoomOnPlayerLeaveEve
 
 #[derive(gateway_derive::Event, encoder::StructSerializer)]
 pub struct RoomOnChatEventArgs {
-    pub author: std::ffi::CString,
-    pub message: std::ffi::CString,
+    pub author: CStrEx,
+    pub message: CStrEx,
 }
 
 #[gateway_derive::event(EventId::RoomOnChat)]
@@ -118,6 +119,7 @@ async fn on_room_change_arena(client: &mut super::Client, data: &RoomOnArenaChan
 
 #[derive(gateway_derive::Event, encoder::StructSerializer)]
 pub struct RoomOnSkillChangedEventArgs {
+    pub success: bool,
     pub ring: Vec<SkillId>,
 }
 
@@ -145,7 +147,7 @@ async fn on_room_change_set_team(client: &mut super::Client, data: &RoomOnTeamCh
 
 #[derive(gateway_derive::Event, encoder::StructSerializer)]
 pub struct RoomOnNameChangedEventArgs {
-    pub name: std::ffi::CString,
+    pub name: CStrEx,
 }
 
 #[gateway_derive::event(EventId::RoomOnNameChanged)]

@@ -203,8 +203,6 @@ impl<C: IClient + Send + Sync> Server<C> {
                     let sender = self.mpsc.0.clone();
                     let cb = cb.clone();
 
-                    println!("New client connected: ID={:?}", id);
-
                     self.socket.insert(id, client.clone());
 
                     tokio::task::Builder::new()

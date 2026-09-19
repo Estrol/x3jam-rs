@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 byteorder-lite = "0.1.0"
 encoder-derive = { path = "../encoder-derive" }
+encoding_rs = "0.8.35"

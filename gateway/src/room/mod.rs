@@ -18,6 +18,7 @@ use std::{
 
 pub use arena::RoomArena;
 pub use difficulty::RoomDifficulty;
+use encoder::stringutil::CStrEx;
 pub use eventtype::GameEventType;
 use futures::FutureExt as _;
 pub use mode::RoomMode;
@@ -295,6 +296,9 @@ pub async fn make_room(
     let counter = Arc::new(AtomicUsize::new(0));
     let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel::<RoomRequest>();
 
+    let region = channel_handle.region;
+    let channel_id = channel_handle.id;
+
     let (mut room, modifier) = Room::new(
         caller,
         counter.clone(),
@@ -307,22 +311,29 @@ pub async fn make_room(
         max_lvl,
     );
 
-    let handle = tokio::spawn(async move {
-        loop {
-            tokio::select! {
-                Some(request) = receiver.recv() => {
-                    let unwind_safe = std::panic::AssertUnwindSafe(process_command(&mut room, request));
-                    if unwind_safe.catch_unwind().await.is_err() {
-                        println!("Room {} panicked while processing command", id);
+    let handle = crate::util::spawn_named(
+        &format!("Room {} (CH: {}:{})", id, region, channel_id),
+        async move {
+            log::info!("Room {} (CH: {}:{}) created", id, region, channel_id);
+
+            loop {
+                tokio::select! {
+                    Some(request) = receiver.recv() => {
+                        let unwind_safe = std::panic::AssertUnwindSafe(process_command(&mut room, request));
+                        if unwind_safe.catch_unwind().await.is_err() {
+                            log::info!("Room {} panicked while processing command", id);
+                        }
+                    }
+                    _ = cancellation_token.cancelled() => {
+                        log::info!("Room {} is being cancelled", id);
+                        break;
                     }
                 }
-                _ = cancellation_token.cancelled() => {
-                    println!("Room {} is being cancelled", id);
-                    break;
-                }
             }
-        }
-    });
+
+            log::info!("Room {} (CH: {}:{}) is removed", id, region, channel_id);
+        },
+    );
 
     Ok((
         RoomHandle {
@@ -341,7 +352,7 @@ pub struct RoomListRepository {
 
 pub async fn process_command(room: &mut Room, mut command: RoomRequest) {
     let Some(data) = command.data.take() else {
-        println!("Room command data is None");
+        log::info!("Room command data is None");
         return;
     };
 
@@ -444,6 +455,6 @@ pub async fn process_command(room: &mut Room, mut command: RoomRequest) {
     }
 }
 
-pub fn to_cstring(t: &str) -> std::ffi::CString {
-    std::ffi::CString::new(t).expect("Failed to convert to CString")
+pub fn to_cstring(t: &str) -> CStrEx {
+    CStrEx::from_string(t)
 }
