@@ -164,7 +164,7 @@ impl GameDatabase {
     }
 
     pub async fn close(&self) {
-        self.connection.close().await;
+        self.connection.close_by_ref().await.expect("Failed to close database connection");
     }
 
     pub fn set_default_equipment(&mut self, gender: CharacterGender, data: [u32; 16]) {
